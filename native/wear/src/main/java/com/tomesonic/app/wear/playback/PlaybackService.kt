@@ -24,6 +24,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.MainActivity
+import android.util.Log
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,7 +54,14 @@ import kotlinx.coroutines.launch
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // The handler is load-bearing: children of this scope are fire-and-forget
+    // command handlers, and an uncaught exception in one would reach the
+    // DEFAULT handler and take the whole watch app down mid-listen. One bad
+    // play must cost that tap, never the process.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            CoroutineExceptionHandler { _, t -> Log.w(TAG, "playback command failed", t) }
+    )
 
     private lateinit var player: ExoPlayer
     private lateinit var sessions: SessionManager
@@ -285,6 +294,8 @@ class PlaybackService : MediaSessionService() {
 
         const val EXTRA_ITEM_ID = "itemId"
         const val EXTRA_EPISODE_ID = "episodeId"
+
+        private const val TAG = "PlaybackService"
 
         /** The contract's transport: −30s / +30s, shared with PlaybackMath. */
         private val SEEK_INCREMENT_MS = (PlaybackMath.SEEK_SECONDS * 1000.0).toLong()

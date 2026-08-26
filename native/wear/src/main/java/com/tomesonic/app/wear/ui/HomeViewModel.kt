@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.data.ItemDetail
 import com.tomesonic.app.wear.data.LastItem
+import com.tomesonic.app.wear.downloads.DownloadEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,7 +15,10 @@ import kotlinx.coroutines.launch
 
 data class HomeUiState(
     val loading: Boolean = true,
-    val rows: List<HomeRow> = emptyList()
+    val rows: List<HomeRow> = emptyList(),
+    /** What the download affordances read, via [HomeSections.downloadState]. */
+    val downloads: List<DownloadEntry> = emptyList(),
+    val requestedDownloads: Set<String> = emptySet()
 )
 
 /**
@@ -65,8 +70,33 @@ class HomeViewModel : ViewModel() {
                     libraries = libraries,
                     downloadCount = downloads.size,
                     offline = offline
-                )
+                ),
+                downloads = downloads,
+                // Kept across refreshes: a queued download is still no entry
+                // (charger + Wi-Fi can be hours away), and downloadState already
+                // lets a real entry outrank the marker.
+                requestedDownloads = _state.value.requestedDownloads
             )
+        }
+    }
+
+    /**
+     * The home affordance's one verb: enqueue with the DEFAULT constraints —
+     * the escape hatch ("Download now") and every other download state live on
+     * the item screen, which the affordance opens once a request is in flight.
+     */
+    fun download(itemId: String, episodeId: String?) {
+        val key = HomeSections.downloadKey(itemId, episodeId)
+        _state.value = _state.value.copy(requestedDownloads = _state.value.requestedDownloads + key)
+        viewModelScope.launch {
+            try {
+                Graph.downloadRepository.enqueue(itemId, episodeId?.takeIf { it.isNotBlank() })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Un-mark, so the row honestly re-offers the download.
+                _state.value = _state.value.copy(requestedDownloads = _state.value.requestedDownloads - key)
+            }
         }
     }
 

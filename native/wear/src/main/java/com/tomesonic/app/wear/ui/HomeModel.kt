@@ -24,6 +24,14 @@ data class ResumeTarget(
     val coverPath: String?
 )
 
+/**
+ * What the download affordance on a home row shows. [Requested] is screen-local
+ * truth — the tap happened, the entry doesn't exist yet (the worker may be
+ * waiting on charger + Wi-Fi); the item screen is where the real progress lives,
+ * which is where the affordance sends a tap in that state.
+ */
+enum class HomeDownloadState { None, Requested, Downloaded }
+
 /** One row of the home list, in the order [HomeSections.build] emits them. */
 sealed interface HomeRow {
     data class Resume(val target: ResumeTarget) : HomeRow
@@ -45,6 +53,29 @@ object HomeSections {
 
     /** Continue Listening on a watch is a glance, not a backlog. */
     const val MAX_CONTINUE = 8
+
+    /** One key per downloadable thing — a podcast row's key is its EPISODE's. */
+    fun downloadKey(itemId: String, episodeId: String?): String =
+        if (episodeId.isNullOrBlank()) itemId else "$itemId::$episodeId"
+
+    /**
+     * The affordance's state for one row, decided the same way playback decides
+     * what is offline: [DownloadEntry.isFor], exactly. A podcast row asks about
+     * its EPISODE — an item-level entry (or some other episode's) does not make
+     * this row's tap play offline, so it must not read as downloaded here.
+     * An entry that exists always outranks a stale requested marker.
+     */
+    fun downloadState(
+        downloads: List<DownloadEntry>,
+        requested: Set<String>,
+        itemId: String,
+        episodeId: String?
+    ): HomeDownloadState = when {
+        downloads.any { it.isFor(itemId, episodeId?.takeIf { e -> e.isNotBlank() }) } ->
+            HomeDownloadState.Downloaded
+        downloadKey(itemId, episodeId) in requested -> HomeDownloadState.Requested
+        else -> HomeDownloadState.None
+    }
 
     /**
      * The resume card's subject: the last thing THIS WATCH played
