@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.data.LoginResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,6 +51,10 @@ class ConnectViewModel : ViewModel() {
         viewModelScope.launch {
             val result = try {
                 Graph.absApi.login(host, user, secret)
+            } catch (e: CancellationException) {
+                // The scope is going away (screen torn down mid-login) — end
+                // with it rather than writing an error into a dead composition.
+                throw e
             } catch (t: Throwable) {
                 // AbsApi.login does not throw; a Graph that isn't initialised
                 // could. Either way the watch is not signed in.
@@ -68,6 +73,8 @@ class ConnectViewModel : ViewModel() {
                     username = result.username
                 )
                 true
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
                 // An unwritable store is the one failure that is neither the
                 // server's nor the password's — and an uncaught one here would

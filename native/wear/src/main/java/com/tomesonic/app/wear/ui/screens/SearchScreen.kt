@@ -74,11 +74,13 @@ fun SearchScreen(
             listOf(RemoteInput.Builder(QUERY_KEY).setLabel("Search").build())
         )
         // launch() THROWS when nothing on the watch handles the remote-input
-        // action. That is a line of copy, not a crash dialog on a media app.
+        // action (ActivityNotFound/Security). That is a line of copy, not a
+        // crash dialog — but only for Exceptions: an Error here is a real bug
+        // and stays loud.
         try {
             launcher.launch(intent)
             inputUnavailable = false
-        } catch (t: Throwable) {
+        } catch (e: Exception) {
             inputUnavailable = true
         }
     }

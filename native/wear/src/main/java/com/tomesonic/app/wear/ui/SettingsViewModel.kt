@@ -6,6 +6,7 @@ import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.data.CredsRepository
 import com.tomesonic.app.wear.data.CredsSource
 import com.tomesonic.app.wear.playback.OfflineProgressQueue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -113,6 +114,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 Graph.credsRepository.clear()
+            } catch (e: CancellationException) {
+                // Cancellation is the scope shutting down, not a failed write —
+                // swallowing it would end this coroutine "normally" inside a
+                // scope that asked it to stop.
+                throw e
             } catch (t: Throwable) {
                 // A store that cannot be written cannot be signed out of. The
                 // screen keeps showing the session, which is the truth.
