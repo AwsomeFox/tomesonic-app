@@ -59,6 +59,21 @@ object HomeSections {
         if (episodeId.isNullOrBlank()) itemId else "$itemId::$episodeId"
 
     /**
+     * Requested markers that have DONE THEIR JOB — the entry exists now — are
+     * dropped on every refresh. A marker that outlived its entry would read as
+     * "Requested" again after the download is later deleted from the item
+     * screen (no request is in flight), and the set would otherwise only ever
+     * grow. A marker whose download is still pending (no entry yet) survives.
+     */
+    fun pruneRequested(requested: Set<String>, downloads: List<DownloadEntry>): Set<String> {
+        if (requested.isEmpty()) return requested
+        val landed = downloads.mapTo(HashSet(downloads.size)) {
+            downloadKey(it.libraryItemId, it.episodeId)
+        }
+        return requested.filterNot { it in landed }.toSet()
+    }
+
+    /**
      * The affordance's state for one row, decided the same way playback decides
      * what is offline: [DownloadEntry.isFor], exactly. A podcast row asks about
      * its EPISODE — an item-level entry (or some other episode's) does not make

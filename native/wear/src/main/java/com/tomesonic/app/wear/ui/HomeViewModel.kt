@@ -78,10 +78,13 @@ class HomeViewModel : ViewModel() {
                         offline = offline
                     ),
                     downloads = downloads,
-                    // Kept across refreshes: a queued download is still no entry
-                    // (charger + Wi-Fi can be hours away), and downloadState
-                    // already lets a real entry outrank the marker.
-                    requestedDownloads = current.requestedDownloads
+                    // Pending markers survive a refresh (a queued download is
+                    // still no entry — charger + Wi-Fi can be hours away);
+                    // markers whose entry has LANDED are dropped, or a later
+                    // delete would resurrect them as a false "Requested".
+                    requestedDownloads = HomeSections.pruneRequested(
+                        current.requestedDownloads, downloads
+                    )
                 )
             }
         }

@@ -114,6 +114,21 @@ class HomeSectionsTest {
     }
 
     @Test
+    fun aLandedDownloadsMarkerIsPrunedAndAPendingOnesSurvives() {
+        val landedBook = HomeSections.downloadKey("b", null)
+        val landedEpisode = HomeSections.downloadKey("p", "ep-1")
+        val stillPending = HomeSections.downloadKey("c", null)
+        val pruned = HomeSections.pruneRequested(
+            setOf(landedBook, landedEpisode, stillPending),
+            listOf(entry("b"), episodeEntry("p", "ep-1"))
+        )
+        // Only the marker with no entry yet remains: the landed ones must go,
+        // or deleting those downloads later would resurrect them as a false
+        // "Requested" — and the set would only ever grow.
+        assertEquals(setOf(stillPending), pruned)
+    }
+
+    @Test
     fun episodeKeysNeverCollideWithTheirPodcastsBookKey() {
         assertEquals("p", HomeSections.downloadKey("p", null))
         assertEquals("p", HomeSections.downloadKey("p", ""))

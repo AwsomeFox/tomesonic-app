@@ -234,14 +234,22 @@ class SessionManager(
 
     suspend fun play(itemId: String, episodeId: String? = null): PlayResult {
         if (itemId.isBlank()) return PlayResult.NoTracks
-        // UNLOCKED fast path first: the common re-tap must not queue behind a
-        // switch that is mid-resolve (the mutex is held across a network round
-        // trip — a deliberate trade: a stop tapped during a slow resolve waits
-        // a few seconds and then wins, which beats the interleaving this mutex
-        // exists to prevent). Racy reads are fine here — the locked path
-        // re-checks before doing anything destructive.
-        if (resumeIfSameTarget(itemId, episodeId)) return PlayResult.Ok
+        // Unlocked fast path, READS ONLY: re-tapping the book that is already
+        // audibly playing answers Ok without queueing behind a switch that is
+        // mid-resolve (the mutex is held across a network round trip — a
+        // deliberate trade: a stop tapped during a slow resolve waits a few
+        // seconds and then wins, which beats the interleaving the mutex
+        // prevents). EVERY player MUTATION stays under the mutex — a paused
+        // same-target resume takes the locked path below, so this can never
+        // race a stop()'s teardown with a play() call.
+        if (isSameTargetPlaying(itemId, episodeId)) return PlayResult.Ok
         return commandMutex.withLock { playLocked(itemId, episodeId) }
+    }
+
+    /** True only when the target is active, loaded AND told to play — no writes. */
+    private suspend fun isSameTargetPlaying(itemId: String, episodeId: String?): Boolean {
+        if (!isSameTarget(PlaybackState.active.value, itemId, episodeId)) return false
+        return withContext(main) { player.mediaItemCount > 0 && player.playWhenReady }
     }
 
     /**
@@ -252,7 +260,8 @@ class SessionManager(
      * paused, change nothing else. The mediaItemCount check is what makes this
      * safe against a stopped player: stop() clears the queue (PlaybackState
      * only after), and an empty queue answers false so the caller runs the
-     * full play path rather than "resuming" nothing.
+     * full play path rather than "resuming" nothing. Called with [commandMutex]
+     * HELD — the resume is a player mutation.
      */
     private suspend fun resumeIfSameTarget(itemId: String, episodeId: String?): Boolean {
         if (!isSameTarget(PlaybackState.active.value, itemId, episodeId)) return false
