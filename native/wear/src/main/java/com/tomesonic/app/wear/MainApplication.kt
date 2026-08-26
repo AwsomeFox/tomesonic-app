@@ -9,9 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-// No notification channel here: media3's DefaultMediaNotificationProvider
-// creates its own, and PlaybackService keeps the stock provider (see its
-// header). A channel declared twice is a second, empty entry in Settings.
+// No notification channel here: WearMediaNotificationProvider creates media3's
+// own default channel (same id the stock provider used, so upgrades keep their
+// Settings entry). A channel declared twice is a second, empty entry in Settings.
 class MainApplication : Application() {
 
     override fun onCreate() {

@@ -270,6 +270,68 @@ class ModelsTest {
     }
 
     @Test
+    fun anEpisodePrefersItsAudioTrackAndFallsBackToItsAudioFile() {
+        // The two shapes ABS puts an episode's audio in, exactly as
+        // utils/downloader.ts reads them: the track carries the direct-play url,
+        // the file carries the ino and the size.
+        val raw = """
+            {
+              "id": "li_p",
+              "media": { "episodes": [
+                { "id": "ep_1", "title": "First",
+                  "audioTrack": { "contentUrl": "/api/items/li_p/file/7001",
+                                  "metadata": { "size": 24000000 } },
+                  "audioFile": { "ino": "7001", "duration": 1800,
+                                 "metadata": { "size": 24000001 } } },
+                { "id": "ep_2", "title": "Second",
+                  "audioFile": { "ino": "7002", "size": 12000000 } },
+                { "id": "ep_3", "title": "Third" }
+              ] }
+            }
+        """.trimIndent()
+        val episodes = ItemDetail.fromJson(obj(raw))!!.episodes
+
+        assertEquals("/api/items/li_p/file/7001", episodes[0].contentUrl)
+        assertEquals("7001", episodes[0].ino)
+        // The TRACK's size wins, like the phone's `audioTrack.metadata?.size ||`.
+        assertEquals(24000000L, episodes[0].size!!)
+        assertEquals(1800.0, episodes[0].duration!!, 1e-9)
+
+        // No track: the ino is the whole download url, and the file's own size
+        // stands in for the missing metadata one.
+        assertNull(episodes[1].contentUrl)
+        assertEquals("7002", episodes[1].ino)
+        assertEquals(12000000L, episodes[1].size!!)
+
+        // An episode with no audio anywhere carries nothing to download.
+        assertNull(episodes[2].contentUrl)
+        assertNull(episodes[2].ino)
+        assertNull(episodes[2].size)
+    }
+
+    @Test
+    fun anEpisodesRecordedZeroSizeIsUnknownNotEmpty() {
+        // A 0 handed on as an expected length would fail every re-download's
+        // completeness check; the phone's `||` chain skips it the same way.
+        val raw = """
+            { "id": "li_p", "media": { "episodes": [
+              { "id": "ep_1", "audioFile": { "ino": "7001", "metadata": { "size": 0 } } }
+            ] } }
+        """.trimIndent()
+        assertNull(ItemDetail.fromJson(obj(raw))!!.episodes[0].size)
+    }
+
+    @Test
+    fun theDownloadFieldsAreAbsentWhenTheServerSendsNothing() {
+        // The v1 fixture: an episode row parsed before any of this existed still
+        // parses, and reports "no downloadable audio" rather than a bad url.
+        val episode = ItemDetail.fromJson(obj(expandedPodcast))!!.episodes[0]
+        assertNull(episode.contentUrl)
+        assertNull(episode.ino)
+        assertNull(episode.size)
+    }
+
+    @Test
     fun anEpisodeWithoutAnIdIsDroppedNotFaked() {
         val raw = """
             { "id": "li_p", "media": { "episodes": [ { "title": "orphan" }, { "id": "ep_ok" } ] } }

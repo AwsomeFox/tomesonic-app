@@ -13,6 +13,7 @@ import androidx.work.workDataOf
 import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.data.AudioTrack
 import com.tomesonic.app.wear.data.ItemDetail
+import com.tomesonic.app.wear.data.PodcastEpisode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -22,13 +23,23 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 /**
- * One item's download, as a WorkManager job.
+ * One ENTRY's download — a whole book, or one podcast episode — as a
+ * WorkManager job.
  *
  * WorkManager rather than a foreground service of our own because the whole
  * point of a watch download is that it survives the app being closed and waits
  * for the charger — constraints, retries and reboot persistence are what this
- * library exists for. One unique job per item ([uniqueWorkName]) so a double tap
- * can't run two copies over the same folder.
+ * library exists for. One unique job per ENTRY ([uniqueWorkName] over
+ * [DownloadEntry.entryId]) so a double tap can't run two copies over the same
+ * folder, while a book and two of its episodes coexist as three jobs.
+ *
+ * FOLDER OWNERSHIP: an entry owns `filesDir/downloads/{entryId}/` entirely and
+ * nothing outside it — its audio AND its own `cover.jpg`. An episode therefore
+ * fetches the podcast's cover a second time into its own folder rather than
+ * pointing at the book entry's copy. That makes every delete one recursive
+ * folder delete that can never take another entry's artwork with it; sharing
+ * one file across entries would need a refcount, and a cover at width 240 is
+ * a few KB.
  *
  * The transfer discipline is ported whole from `utils/downloader.ts`: stream to
  * a `.part` file, verify the length the server promised, and only then rename
@@ -43,8 +54,15 @@ class DownloadWorker(
 
     private val itemId: String get() = inputData.getString(KEY_ITEM_ID).orEmpty()
 
+    /** Blank is absent: a book job may carry the key with nothing in it. */
+    private val episodeId: String?
+        get() = inputData.getString(KEY_EPISODE_ID)?.takeIf { it.isNotBlank() }
+
+    /** The folder name, the index key and the notification id. `itemId` for a book. */
+    private val entryId: String get() = DownloadEntry.entryId(itemId, episodeId)
+
     // Filled in once the expanded item lands, so the notification stops saying
-    // "Downloading" and starts naming the book.
+    // "Downloading" and starts naming the book (or the episode).
     @Volatile
     private var itemTitle: String? = null
 
@@ -53,11 +71,16 @@ class DownloadWorker(
 
     override suspend fun doWork(): Result {
         val id = itemId.takeIf { isSafeName(it) } ?: return Result.failure()
+        val episode = episodeId
+        // Both halves are checked: the item id is server-supplied and so is the
+        // episode id it was composed with (sanitised, but a composed name still
+        // has to be a plain component before anything creates it).
+        val key = entryId.takeIf { isSafeName(it) } ?: return Result.failure()
         // Defensive, per Graph's own contract: WorkManager can start this in a
         // process where nothing else has run yet. Idempotent.
         Graph.init(applicationContext)
         val repository = Graph.downloadRepository
-        val dir = repository.itemDir(id)
+        val dir = repository.itemDir(key)
 
         try {
             report(id, 0)
@@ -68,14 +91,24 @@ class DownloadWorker(
             // number of times turns the common one (a dropped BT/WiFi link)
             // into a delay instead of a failure.
             val item = Graph.absApi.itemExpanded(id) ?: return retryOrFail(dir)
-            itemTitle = item.title
+            val episodeRow = episode?.let { wanted ->
+                // The fetch SUCCEEDED and the episode isn't in it: the feed
+                // dropped it (or the id was stale). Asking again gets the same
+                // answer, so this is terminal rather than a retry.
+                item.episodes.firstOrNull { it.id == wanted } ?: return failAndClean(dir)
+            }
+            itemTitle = episodeRow?.title ?: item.title
             pushForeground()
 
-            val plan = buildPlan(item, dir, Graph.absApi.coverUrl(id))
-                // No usable audio: a podcast (episode downloads are a v1
-                // non-goal), or metadata with no contentUrl and no ino. Retrying
-                // would not change the answer.
-                ?: return failAndClean(dir)
+            val coverUrl = Graph.absApi.coverUrl(id)
+            val plan = if (episodeRow == null) {
+                buildPlan(item, dir, coverUrl)
+            } else {
+                buildEpisodePlan(id, episodeRow, dir, coverUrl)
+            }
+            // No usable audio: a podcast asked for as a book, or metadata with
+            // no contentUrl and no ino. Retrying would not change the answer.
+            if (plan == null) return failAndClean(dir)
 
             withContext(Dispatchers.IO) { dir.mkdirs() }
 
@@ -109,10 +142,16 @@ class DownloadWorker(
             }
 
             val entry = DownloadEntry(
-                id = item.id,
+                // The REQUESTED id, not the one the response echoed: this is the
+                // folder that was just written and the key every lookup uses, and
+                // the two must not be able to disagree.
+                id = key,
+                // The ITEM's title even for an episode — the downloads row shows
+                // the episode title first and this one under it, and an offline
+                // item screen has nothing else to call the podcast.
                 title = item.title,
                 author = item.authorName,
-                duration = item.duration,
+                duration = if (episodeRow != null) (episodeRow.duration ?: 0.0) else item.duration,
                 coverPath = coverFile?.takeIf { it.isFile }?.absolutePath,
                 tracks = plan.tracks.map {
                     DownloadTrack(
@@ -122,10 +161,13 @@ class DownloadWorker(
                         contentUrl = it.track.contentUrl
                     )
                 },
-                bytes = withContext(Dispatchers.IO) { bytesOnDisk(dir) }
+                bytes = withContext(Dispatchers.IO) { bytesOnDisk(dir) },
+                libraryItemId = id,
+                episodeId = episodeRow?.id,
+                episodeTitle = episodeRow?.title
             )
             // The index entry is written LAST and only on success: its presence
-            // is what "this book is on the watch" means to every other wave.
+            // is what "this is on the watch" means to every other wave.
             repository.index.upsert(entry)
             report(id, 100)
             return Result.success()
@@ -148,7 +190,9 @@ class DownloadWorker(
      * WorkManager asks for it itself whenever it promotes the job.
      */
     override suspend fun getForegroundInfo(): ForegroundInfo =
-        foregroundInfo(applicationContext, itemId, itemTitle, lastProgress)
+        // Keyed by the ENTRY, so a book and one of its episodes downloading at
+        // once own two notifications instead of overwriting one.
+        foregroundInfo(applicationContext, entryId, itemTitle, lastProgress)
 
     /**
      * Never fatal. POST_NOTIFICATIONS is a runtime permission the user can
@@ -277,6 +321,10 @@ class DownloadWorker(
     companion object {
 
         const val KEY_ITEM_ID = "itemId"
+
+        /** Absent (or blank) means "the book" — the v1 job, unchanged. */
+        const val KEY_EPISODE_ID = "episodeId"
+
         const val KEY_PROGRESS = "progress"
 
         /** Low importance: a progress bar must never buzz someone's wrist. */
@@ -293,8 +341,13 @@ class DownloadWorker(
         private const val PROGRESS_MIN_INTERVAL_MS = 750L
         private const val NOTIFICATION_ID_BASE = 4200
 
-        /** One job per item — a double tap enqueues the same name and KEEPs the first. */
-        fun uniqueWorkName(itemId: String): String = "download_$itemId"
+        /**
+         * One job per ENTRY — a double tap enqueues the same name and KEEPs the
+         * first. Take [entryId] from [DownloadEntry.entryId], which is the item
+         * id itself for a book (so v1 job names are unchanged) and carries the
+         * episode discriminator otherwise.
+         */
+        fun uniqueWorkName(entryId: String): String = "download_$entryId"
 
         /**
          * A single path component we are willing to create under filesDir. Track
@@ -320,9 +373,9 @@ class DownloadWorker(
          * pinned by tests rather than by a server round trip.
          *
          * Null when the item has nothing downloadable: no tracks at all (a
-         * podcast — episode downloads are a documented v1 non-goal), a row whose
-         * url resolves to the empty-ino `/file/` endpoint, or a filename that
-         * would escape [dir].
+         * podcast, whose audio lives on its episodes — see [buildEpisodePlan]),
+         * a row whose url resolves to the empty-ino `/file/` endpoint, or a
+         * filename that would escape [dir].
          */
         fun buildPlan(item: ItemDetail, dir: File, coverUrl: String?): DownloadPlan? {
             if (item.tracks.isEmpty()) return null
@@ -341,6 +394,82 @@ class DownloadWorker(
         }
 
         /**
+         * ONE episode's download: its single audio file, plus the podcast cover
+         * into the EPISODE's own folder (see the class comment's ownership rule).
+         *
+         * Null for an episode with no downloadable audio — the same bail the
+         * phone's downloadEpisode makes, and for the same reason.
+         */
+        fun buildEpisodePlan(
+            itemId: String,
+            episode: PodcastEpisode,
+            dir: File,
+            coverUrl: String?
+        ): DownloadPlan? {
+            val url = episodeUrl(itemId, episode) ?: return null
+            val filename = episodeFilename(url)
+            val target = resolveInside(dir, filename) ?: return null
+            val track = AudioTrack(
+                index = 0,
+                startOffset = 0.0,
+                duration = episode.duration ?: 0.0,
+                title = episode.title,
+                contentUrl = url,
+                // Left empty exactly like DownloadsLocalSource does for a played
+                // file: media3 sniffs the container, and a guessed mime type is
+                // the one that can be WRONG.
+                mimeType = "",
+                filename = filename
+            )
+            val cover = coverUrl
+                ?.takeIf { it.isNotBlank() }
+                ?.let { PlannedDownload(it, File(dir, COVER_FILENAME)) }
+            return DownloadPlan(
+                itemId,
+                dir,
+                cover,
+                listOf(PlannedTrack(track, PlannedDownload(url, target, episode.size ?: 0L)))
+            )
+        }
+
+        /**
+         * The episode's file url in utils/downloader.ts's order: the direct-play
+         * contentUrl the server exposes on the audioTrack, else the ino file
+         * endpoint. Null when the episode carries neither — the fallback would
+         * then be `/api/items/{id}/file/` with no ino at all.
+         */
+        fun episodeUrl(itemId: String, episode: PodcastEpisode): String? {
+            episode.contentUrl?.takeIf { isUsableUrl(it) }?.let { return it }
+            val ino = episode.ino?.takeIf { it.isNotBlank() } ?: return null
+            return "/api/items/$itemId/file/$ino"
+        }
+
+        /**
+         * `track_0.<ext>`. One audio file per episode entry, in a folder of its
+         * own, so the name only has to be STABLE (a re-run must recognise it),
+         * never unique across items — which is why this doesn't need the phone's
+         * collision uniquifier.
+         *
+         * The extension is read off the url's own last segment when it carries a
+         * plausible one and is `mp3` otherwise: ABS's `/file/{ino}` endpoint
+         * names no format, and nothing downstream depends on the guess (media3
+         * sniffs the container, and the ext is not part of any lookup key).
+         */
+        fun episodeFilename(url: String?): String = "track_0.${episodeExt(url)}"
+
+        private fun episodeExt(url: String?): String {
+            val path = url?.substringBefore('?')?.substringBefore('#').orEmpty()
+            val ext = path.substringAfterLast('/').substringAfterLast('.', "")
+            // Letters and digits only, so a mangled url can never contribute a
+            // path separator to a filename.
+            return if (ext.length in 1..5 && ext.all { it.isLetterOrDigit() }) {
+                ext.lowercase()
+            } else {
+                "mp3"
+            }
+        }
+
+        /**
          * `/api/items/{id}/file/` with no ino is what Models.kt synthesises for a
          * row carrying neither a contentUrl nor an ino — the phone's
          * downloadEpisode rejects exactly this shape, for the same reason: it
@@ -353,8 +482,11 @@ class DownloadWorker(
          * the final name after their stream completed AND matched the server's
          * Content-Length, so any non-empty target is complete by construction —
          * which is what makes a re-run a resume. [expectedBytes] is honoured when
-         * a caller does know the size; 0 means unknown, which is the usual case
-         * (ABS's expanded item carries a whole-item `size`, never a per-track one).
+         * a caller does know the size: 0 for a book's tracks (ABS's expanded item
+         * carries a whole-item `size`, never a per-track one), the episode's own
+         * recorded size for an episode. A size the server later disagrees with
+         * costs one re-fetch on a re-run, never a wrong file — the transfer's own
+         * check is still Content-Length.
          */
         fun isComplete(existingBytes: Long, expectedBytes: Long = 0L): Boolean =
             existingBytes > 0L && (expectedBytes <= 0L || existingBytes == expectedBytes)
@@ -404,11 +536,11 @@ class DownloadWorker(
             if (itemTitle.isNullOrBlank()) "Downloading" else "Downloading $itemTitle"
 
         /**
-         * Distinct per item so two queued downloads don't overwrite each other's
-         * notification, and never 0 (which the platform rejects).
+         * Distinct per ENTRY so two queued downloads don't overwrite each
+         * other's notification, and never 0 (which the platform rejects).
          */
-        fun notificationId(itemId: String): Int =
-            NOTIFICATION_ID_BASE + (itemId.hashCode() and 0xffff)
+        fun notificationId(entryId: String): Int =
+            NOTIFICATION_ID_BASE + (entryId.hashCode() and 0xffff)
 
         /**
          * Created HERE rather than in MainApplication: this is the only component
@@ -434,7 +566,7 @@ class DownloadWorker(
 
         fun foregroundInfo(
             context: Context,
-            itemId: String,
+            entryId: String,
             itemTitle: String?,
             progress: Int
         ): ForegroundInfo {
@@ -458,12 +590,12 @@ class DownloadWorker(
                 // dataSync in the merged manifest — see pushForeground for what
                 // happens when it doesn't.
                 ForegroundInfo(
-                    notificationId(itemId),
+                    notificationId(entryId),
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                 )
             } else {
-                ForegroundInfo(notificationId(itemId), notification)
+                ForegroundInfo(notificationId(entryId), notification)
             }
         }
     }

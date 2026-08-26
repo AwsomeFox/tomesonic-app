@@ -81,9 +81,11 @@ fun PlayerScreen(player: PlayerConnection) {
 
     val itemId = state.itemId
     // entryForNow is the non-suspending index read; MainApplication warms the
-    // index at startup, so this answers correctly from the first frame.
-    val downloaded = remember(itemId) {
-        itemId != null && Graph.downloadRepository.entryForNow(itemId) != null
+    // index at startup, so this answers correctly from the first frame. The
+    // episode id rides along since v2: a downloaded EPISODE's marker lives on
+    // its own entry, not the podcast's.
+    val downloaded = remember(itemId, state.episodeId) {
+        itemId != null && Graph.downloadRepository.entryForNow(itemId, state.episodeId) != null
     }
     val fraction = if (state.durationMs > 0L) {
         (state.positionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f)

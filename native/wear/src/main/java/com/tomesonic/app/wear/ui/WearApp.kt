@@ -19,6 +19,7 @@ import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import com.tomesonic.app.wear.DebugLaunch
+import com.tomesonic.app.wear.LaunchRequests
 import com.tomesonic.app.wear.ui.components.AppMarkGlyph
 import com.tomesonic.app.wear.ui.components.LocalCoverLoader
 import com.tomesonic.app.wear.ui.screens.ConnectScreen
@@ -27,6 +28,7 @@ import com.tomesonic.app.wear.ui.screens.HomeScreen
 import com.tomesonic.app.wear.ui.screens.ItemScreen
 import com.tomesonic.app.wear.ui.screens.LibraryScreen
 import com.tomesonic.app.wear.ui.screens.PlayerScreen
+import com.tomesonic.app.wear.ui.screens.SearchScreen
 import com.tomesonic.app.wear.ui.screens.SettingsScreen
 import com.tomesonic.app.wear.ui.theme.TomeSonicWearTheme
 
@@ -86,19 +88,37 @@ fun WearApp() {
                         )
                     }
 
-                    // Screenshot/dev rig, DEBUG BUILDS ONLY: MainActivity is the
-                    // only writer of these holders and only behind a
-                    // FLAG_DEBUGGABLE check, so both are null in a release build
-                    // and the two lines below take their normal branch. See
-                    // DebugLaunch and .github/workflows/wear-screenshots.yml.
+                    // Two one-shot launch channels share this effect: the
+                    // screenshot rig's DebugLaunch (debug builds only — see its
+                    // FLAG_DEBUGGABLE gate) and the tile/complication taps in
+                    // LaunchRequests, which ship in every build. Keyed on the
+                    // REVISION, not Unit: a tile tap on an already-open app
+                    // lands in MainActivity.onNewIntent long after a Unit-keyed
+                    // effect has run and would never look again.
+                    val launchRevision by LaunchRequests.revision.collectAsState()
                     if (connected) {
-                        LaunchedEffect(Unit) {
+                        LaunchedEffect(launchRevision) {
                             // Consumed rather than observed — the rig asks for
                             // one screen and one book, once, on the launch that
                             // named them. navigate() rather than a start
                             // destination for arg routes: see DebugLaunch.route.
                             DebugLaunch.consumeNavigateRoute()?.let { navController.navigate(it) }
                             DebugLaunch.consumePlayItemId()?.let { root.player.playItem(it) }
+
+                            // Tile / complication tap. A Resume with an item
+                            // starts the book; a bare open-player (the
+                            // complication) shows whatever is current.
+                            LaunchRequests.consume()?.let { request ->
+                                val itemId = request.playItemId
+                                if (itemId != null) {
+                                    openPlayer(itemId, request.playEpisodeId)
+                                } else if (request.openPlayer) {
+                                    navController.navigate(
+                                        Routes.PLAYER,
+                                        NavOptions.Builder().setLaunchSingleTop(true).build()
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -121,6 +141,7 @@ fun WearApp() {
                             HomeScreen(
                                 onPlay = openPlayer,
                                 onOpenLibrary = { navController.navigate(Routes.library(it)) },
+                                onOpenSearch = { navController.navigate(Routes.search(it)) },
                                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
                             )
@@ -128,6 +149,14 @@ fun WearApp() {
 
                         composable(Routes.LIBRARY_TEMPLATE) { entry ->
                             LibraryScreen(
+                                libraryId = entry.arguments?.getString(Routes.ARG_ID).orEmpty(),
+                                onOpenItem = { navController.navigate(Routes.item(it)) },
+                                onOpenSearch = { navController.navigate(Routes.search(it)) }
+                            )
+                        }
+
+                        composable(Routes.SEARCH_TEMPLATE) { entry ->
+                            SearchScreen(
                                 libraryId = entry.arguments?.getString(Routes.ARG_ID).orEmpty(),
                                 onOpenItem = { navController.navigate(Routes.item(it)) }
                             )

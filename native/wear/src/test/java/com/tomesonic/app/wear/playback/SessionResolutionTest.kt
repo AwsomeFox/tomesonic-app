@@ -23,8 +23,10 @@ import java.time.ZoneId
 
 /**
  * The local-vs-stream decision — the one rule this wave exists to enforce:
- * a DOWNLOADED book always plays its own files and never touches the network,
- * and everything else requires the network.
+ * a DOWNLOADED book (or, since v2, a downloaded EPISODE) always plays its own
+ * files and never touches the network, and everything else requires the network.
+ * An episode resolves against its OWN entry, so neither a downloaded podcast nor
+ * a downloaded sibling episode can make it play the wrong audio.
  *
  * Tested through SessionManager.resolve, which is deliberately player-free: the
  * decision, the queue it produces and the resume point it picks are all
@@ -94,16 +96,49 @@ class SessionResolutionTest {
         track(1, 200.0, 200.0, "/api/items/li_1/file/12")
     )
 
+    private val downloadedEpisode = LocalBook(
+        itemId = "li_1",
+        // What DownloadsLocalSource builds for an episode entry: the EPISODE's
+        // title (the notification names what is playing), the podcast's author.
+        title = "Episode 42",
+        author = "Host Person",
+        duration = 1800.0,
+        coverUri = "file:///files/downloads/li_1-ep-ep_42/cover.jpg",
+        tracks = listOf(track(0, 0.0, 1800.0, "file:///files/downloads/li_1-ep-ep_42/track_0.mp3"))
+    )
+
+    /**
+     * A source holding ONE episode and no book — the shape DownloadsLocalSource
+     * has when a single episode of a never-downloaded podcast is on the watch.
+     */
+    private fun episodeSource(onlyEpisode: String, book: LocalBook) = object : LocalPlaybackSource {
+        override fun localBook(itemId: String): LocalBook? = null
+
+        override fun localEpisode(itemId: String, episodeId: String): LocalBook? =
+            book.takeIf { episodeId == onlyEpisode }
+    }
+
     private suspend fun resolve(
         itemId: String = "li_1",
         episodeId: String? = null,
         local: LocalBook? = null
+    ) = resolveWith(
+        itemId = itemId,
+        episodeId = episodeId,
+        // The SAM form is v1's whole world: books on disk, nothing episodic.
+        source = local?.let { book -> LocalPlaybackSource { book } }
+    )
+
+    private suspend fun resolveWith(
+        itemId: String = "li_1",
+        episodeId: String? = null,
+        source: LocalPlaybackSource?
     ) = SessionManager.resolve(
         itemId = itemId,
         episodeId = episodeId,
         credsRepository = creds,
         queue = queue,
-        local = local?.let { book -> LocalPlaybackSource { book } },
+        local = source,
         openSession = { id, ep ->
             openedSessions.add(id to ep)
             serverAnswer
@@ -175,13 +210,100 @@ class SessionResolutionTest {
 
     @Test
     fun aPodcastEpisodeStreamsEvenWhenTheItemIsDownloaded() = runBlocking {
-        // Episode downloads are a v1 non-goal, so an itemId hit must not be
-        // mistaken for "this episode is on disk".
+        // A downloaded ITEM is not a downloaded EPISODE: the two are separate
+        // entries, so an itemId hit must not be mistaken for "this episode is on
+        // disk". (This is also every v1 source, which resolves books only.)
         login()
         serverAnswer = streamed()
         val ready = resolve(episodeId = "ep_9", local = downloaded) as SessionManager.Resolution.Ready
         assertEquals(listOf("li_1" to "ep_9"), openedSessions)
         assertEquals("sess_1", ready.session.serverSessionId)
+    }
+
+    // ---- downloaded episodes -----------------------------------------------
+
+    @Test
+    fun aDownloadedEpisodePlaysItsOwnFileAndNeverOpensAServerSession() = runBlocking {
+        login()
+        val ready = resolveWith(
+            episodeId = "ep_42",
+            source = episodeSource("ep_42", downloadedEpisode)
+        ) as SessionManager.Resolution.Ready
+
+        assertTrue(openedSessions.isEmpty())
+        assertNull(ready.session.serverSessionId)
+        assertTrue(ready.session.isLocal)
+        assertEquals(1, ready.items.size)
+        assertEquals(
+            "file:///files/downloads/li_1-ep-ep_42/track_0.mp3",
+            ready.items[0].localConfiguration?.uri?.toString()
+        )
+        assertEquals("Episode 42", ready.session.title)
+    }
+
+    @Test
+    fun aDownloadedEpisodeKeepsItsEpisodeIdAndPodcastMediaType() = runBlocking {
+        // Both are read straight off the session by ProgressSyncer: the episode
+        // id keys the offline queues (`wear-local_<item>-<ep>_<date>`) and the
+        // media type is what ABS files the local session under.
+        login()
+        val ready = resolveWith(
+            episodeId = "ep_42",
+            source = episodeSource("ep_42", downloadedEpisode)
+        ) as SessionManager.Resolution.Ready
+        assertEquals("li_1", ready.session.itemId)
+        assertEquals("ep_42", ready.session.episodeId)
+        assertEquals("podcast", ready.session.mediaType)
+    }
+
+    @Test
+    fun aDownloadedEpisodePlaysWithNoCredentialsAtAll() = runBlocking {
+        val ready = resolveWith(
+            episodeId = "ep_42",
+            source = episodeSource("ep_42", downloadedEpisode)
+        )
+        assertTrue(ready is SessionManager.Resolution.Ready)
+        assertTrue(openedSessions.isEmpty())
+    }
+
+    @Test
+    fun aDownloadedEpisodeResumesFromItsOwnMarkerNotThePodcasts() = runBlocking {
+        login()
+        queue.setResume("li_1", null, 500.0)
+        queue.setResume("li_1", "ep_42", 137.5)
+        val ready = resolveWith(
+            episodeId = "ep_42",
+            source = episodeSource("ep_42", downloadedEpisode)
+        ) as SessionManager.Resolution.Ready
+        assertEquals(137.5, ready.startSeconds, 1e-9)
+    }
+
+    @Test
+    fun anotherEpisodeOfTheSamePodcastStillStreams() = runBlocking {
+        // One episode on disk must not make the whole feed look local.
+        login()
+        serverAnswer = streamed()
+        val ready = resolveWith(
+            episodeId = "ep_43",
+            source = episodeSource("ep_42", downloadedEpisode)
+        ) as SessionManager.Resolution.Ready
+        assertEquals(listOf("li_1" to "ep_43"), openedSessions)
+        assertEquals("sess_1", ready.session.serverSessionId)
+    }
+
+    @Test
+    fun aBlankEpisodeIdIsTheBookNotAnEpisode() = runBlocking {
+        // The repository's null-or-blank convention, on the playback side: an
+        // empty string must not go looking for an episode entry.
+        login()
+        val source = object : LocalPlaybackSource {
+            override fun localBook(itemId: String): LocalBook? = downloaded
+            override fun localEpisode(itemId: String, episodeId: String): LocalBook? = null
+        }
+        val ready = resolveWith(episodeId = "", source = source) as SessionManager.Resolution.Ready
+        assertNull(ready.session.episodeId)
+        assertEquals("book", ready.session.mediaType)
+        assertTrue(openedSessions.isEmpty())
     }
 
     @Test

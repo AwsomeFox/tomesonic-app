@@ -16,11 +16,13 @@ import com.tomesonic.app.wear.ui.components.SectionHeader
 import com.tomesonic.app.wear.ui.components.coverModel
 
 /**
- * What is actually on the watch.
+ * What is actually on the watch — books and single podcast episodes in one list,
+ * since both are one entry and one folder each.
  *
  * Rows lead to the item screen rather than playing directly — the reason to open
- * this list is usually to delete something, and the delete lives there. (Home is
- * where tapping a book plays it.)
+ * this list is usually to delete something, and the delete lives there (an
+ * episode's on its own row of the podcast's episode list). (Home is where
+ * tapping a book plays it.)
  */
 @Composable
 fun DownloadsScreen(onOpenItem: (String) -> Unit) {
@@ -49,14 +51,22 @@ fun DownloadsScreen(onOpenItem: (String) -> Unit) {
 
         items(state.entries.size) { index ->
             val entry = state.entries[index]
+            // An EPISODE row names the episode and puts its podcast underneath —
+            // "Ep 412" over "The Show · 24 MB" — because in a list of downloads
+            // the podcast title is the one thing every one of its episodes
+            // repeats. A book keeps its author line exactly as before.
+            val episode = entry.episodeTitle?.takeIf { it.isNotBlank() }
             MediaRow(
-                title = entry.title,
+                title = episode ?: entry.title,
                 subtitle = listOfNotNull(
-                    entry.author?.takeIf { it.isNotBlank() },
+                    (if (episode != null) entry.title else entry.author)?.takeIf { it.isNotBlank() },
                     UiFormat.bytes(entry.bytes)
                 ).joinToString(" · "),
-                cover = coverModel(entry.coverPath, entry.id),
-                onClick = { onOpenItem(entry.id) },
+                // Both keyed by the LIBRARY ITEM: an entry id is not something
+                // the server (or the item screen) can be handed — for a book it
+                // is the item id anyway.
+                cover = coverModel(entry.coverPath, entry.libraryItemId),
+                onClick = { onOpenItem(entry.libraryItemId) },
                 trailing = { ChevronGlyph(tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             )
         }

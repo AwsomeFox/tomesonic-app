@@ -36,6 +36,14 @@ object Graph {
             ?: throw IllegalStateException("Graph.init(context) must run before the graph is used")
 
     /**
+     * For callers that need a Context but must not carry one of their own —
+     * the tile-refresh hooks fire from objects (SessionManager, the Data Layer
+     * listener) whose constructors predate any need for one.
+     */
+    val applicationContext: Context
+        get() = context
+
+    /**
      * The wear apk's versionName, read from PackageManager rather than
      * BuildConfig: `buildFeatures.buildConfig` defaults to FALSE under AGP 8,
      * and the only thing that turns it on in this project is React Native's

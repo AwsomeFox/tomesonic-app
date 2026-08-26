@@ -71,11 +71,13 @@ to `filesDir/auto_creds.json`, native reads it and even self-refreshes against
   (`utils/api.ts` documents the stranding hazard); phone and watch racing
   `/auth/refresh` on one session would log each other out. v1 mirrors the **access
   token only**: streaming/browse work while it's valid, downloaded books play
-  regardless, and offline progress queues (below) until the next sync. Honest
-  consequence: `com.google.android.wearable.standalone` = **false** for v1.
-- v2 — **watch-owned session**: on-watch login (server URL + user/pass form, or
-  wear remote-auth for OIDC servers) giving the watch its own token pair and its own
-  port of the patch's native `/auth/refresh` loop. Then standalone=true.
+  regardless, and offline progress queues (below) until the next sync. That was
+  v1 (`standalone` = false).
+- v2 (SHIPPED) — **watch-owned session**: on-watch login (three-step RemoteInput:
+  server, username, password) gives the watch its own token pair and a
+  single-flight `/auth/refresh` port (see `data/RefreshPolicy.kt`); phone
+  mirroring stays the primary path and its credentials take precedence.
+  `standalone` = **true**. OIDC/remote-auth remains future work.
 
 ## Browse
 
@@ -147,8 +149,9 @@ MediaSession → watch media controls, Ongoing Activity chip):
   script.
 - Play Console: enroll the app in the **Wear OS form factor**, wear screenshots
   (round), pass Wear media-app review. Watch manifest declares
-  `<uses-feature android.hardware.type.watch/>` + the standalone flag (false in v1,
-  see Auth).
+  `<uses-feature android.hardware.type.watch/>` + the standalone flag (true
+  since v2 — Play then also serves the app to untethered/iOS-paired watches,
+  and Wear review checks it works without the phone; see Auth).
 - CI tests: wear unit tests are plain Robolectric — add `:wear:testDebugUnitTest` to
   `android-unit-tests.yml`.
 

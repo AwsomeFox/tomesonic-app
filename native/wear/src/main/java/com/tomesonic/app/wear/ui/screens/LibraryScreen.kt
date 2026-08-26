@@ -17,6 +17,7 @@ import com.tomesonic.app.wear.ui.components.MediaRow
 import com.tomesonic.app.wear.ui.components.Note
 import com.tomesonic.app.wear.ui.components.ScreenTitle
 import com.tomesonic.app.wear.ui.components.ScrollScreen
+import com.tomesonic.app.wear.ui.components.SearchGlyph
 import com.tomesonic.app.wear.ui.components.TomeChip
 import com.tomesonic.app.wear.ui.components.coverModel
 
@@ -32,7 +33,8 @@ import com.tomesonic.app.wear.ui.components.coverModel
 @Composable
 fun LibraryScreen(
     libraryId: String,
-    onOpenItem: (String) -> Unit
+    onOpenItem: (String) -> Unit,
+    onOpenSearch: (String) -> Unit
 ) {
     val viewModel: LibraryViewModel = viewModel()
     val state by viewModel.state.collectAsState()
@@ -41,6 +43,16 @@ fun LibraryScreen(
 
     ScrollScreen {
         item { ScreenTitle(state.name) }
+
+        item {
+            // Above the rows: search is the alternative to paging a library that
+            // does not fit on a watch, so it cannot sit at the end of the paging.
+            TomeChip(
+                label = "Search",
+                onClick = { onOpenSearch(libraryId) },
+                icon = { SearchGlyph(tint = MaterialTheme.colorScheme.primary) }
+            )
+        }
 
         items(state.items.size) { index ->
             val summary = state.items[index]

@@ -66,11 +66,21 @@ object HomeSections {
         val lastId = last?.itemId
         if (lastId != null) {
             val row = inProgress.firstOrNull { it.id == lastId }
-            downloads.firstOrNull { it.id == lastId }?.let { entry ->
+            // isFor, not an id compare: a downloaded EPISODE's entry id is the
+            // composite key, and the resume pointer holds the podcast's item id
+            // plus the episode id. Books match exactly as before. The fallback
+            // keeps v1's rule: an episode resume whose PODCAST has an item-level
+            // entry still gets its card described off the index (title, cover,
+            // offline) — the episode itself streams, exactly as it always did.
+            val entry = downloads.firstOrNull { it.isFor(lastId, last.episodeId) }
+                ?: last.episodeId?.let { downloads.firstOrNull { e -> e.isFor(lastId, null) } }
+            if (entry != null) {
                 return ResumeTarget(
-                    itemId = entry.id,
+                    // The ITEM id — an episode entry's own id is a folder key,
+                    // not something the server or the player should ever see.
+                    itemId = entry.libraryItemId,
                     episodeId = last.episodeId,
-                    title = entry.title,
+                    title = entry.episodeTitle?.takeIf { it.isNotBlank() } ?: entry.title,
                     author = entry.author,
                     progress = row?.progress,
                     downloaded = true,
@@ -90,10 +100,15 @@ object HomeSections {
         episodeId: String?,
         downloads: List<DownloadEntry>
     ): ResumeTarget {
-        val entry = downloads.firstOrNull { it.id == item.id }
+        val resolvedEpisode = episodeId ?: item.episodeId
+        // The episode's own entry wins; an item-level entry (a v1-style podcast
+        // download) still describes the card. Some OTHER episode's entry never
+        // matches either arm — episode entries carry their episodeId.
+        val entry = downloads.firstOrNull { it.isFor(item.id, resolvedEpisode) }
+            ?: resolvedEpisode?.let { downloads.firstOrNull { e -> e.isFor(item.id, null) } }
         return ResumeTarget(
             itemId = item.id,
-            episodeId = episodeId ?: item.episodeId,
+            episodeId = resolvedEpisode,
             title = item.title,
             author = item.authorName,
             progress = item.progress,

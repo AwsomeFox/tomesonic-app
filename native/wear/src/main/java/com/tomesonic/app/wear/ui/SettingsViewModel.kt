@@ -3,7 +3,10 @@ package com.tomesonic.app.wear.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tomesonic.app.wear.Graph
+import com.tomesonic.app.wear.data.CredsRepository
+import com.tomesonic.app.wear.data.CredsSource
 import com.tomesonic.app.wear.playback.OfflineProgressQueue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +17,8 @@ data class SettingsUiState(
     val host: String? = null,
     val username: String? = null,
     val connected: Boolean = false,
+    /** Null when nothing is stored — the source of what IS stored otherwise. */
+    val source: CredsSource? = null,
     val storageBytes: Long = 0L,
     val version: String = "",
     val syncing: Boolean = false,
@@ -22,12 +27,14 @@ data class SettingsUiState(
 )
 
 /**
- * Settings is a read-only screen with one verb.
+ * Settings is a read-only screen with two verbs, and the second one only
+ * sometimes.
  *
- * There is no "disconnect watch": logout is phone-driven (the phone puts empty
- * credentials on the Data Layer and CredsRepository clears itself), and a watch
- * that could log itself out would leave the phone thinking it was still paired —
- * a documented v1 non-goal, not an omission.
+ * Sign-out is offered for a WATCH login and nothing else. A phone-mirrored
+ * session is the phone's to end — the watch clearing it would leave the phone
+ * still pushing the same credentials back over the Data Layer, so the button
+ * would appear to do nothing. A watch login has no such owner, which is exactly
+ * why it needs one here.
  */
 class SettingsViewModel : ViewModel() {
 
@@ -41,7 +48,8 @@ class SettingsViewModel : ViewModel() {
                 _state.value = _state.value.copy(
                     host = creds?.server?.let { UiFormat.hostOnly(it) },
                     username = creds?.username?.takeIf { it.isNotBlank() },
-                    connected = creds != null && !Graph.absClient.authFailed.value
+                    connected = creds != null && !Graph.absClient.authFailed.value,
+                    source = creds?.source
                 )
             }
         }
@@ -90,6 +98,31 @@ class SettingsViewModel : ViewModel() {
                 syncing = false,
                 syncMessage = if (ok) "Synced" else "Sync failed — try again in range"
             )
+        }
+    }
+
+    /**
+     * Ends a watch-owned session. The same [CredsRepository.clear] a phone
+     * logout performs, so the user-scoped state goes with it — including any
+     * offline listening that never reached the server, which is why the screen
+     * asks twice and says so.
+     *
+     * Downloads are NOT touched: files on this watch outlive the login that
+     * fetched them, and deleting them is the Downloads screen's job.
+     */
+    fun signOut() {
+        viewModelScope.launch {
+            try {
+                Graph.credsRepository.clear()
+            } catch (e: CancellationException) {
+                // Cancellation is the scope shutting down, not a failed write —
+                // swallowing it would end this coroutine "normally" inside a
+                // scope that asked it to stop.
+                throw e
+            } catch (t: Throwable) {
+                // A store that cannot be written cannot be signed out of. The
+                // screen keeps showing the session, which is the truth.
+            }
         }
     }
 }

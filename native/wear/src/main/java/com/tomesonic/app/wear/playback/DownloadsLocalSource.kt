@@ -12,7 +12,7 @@ import java.io.File
  * which is what keeps the local-vs-stream resolution JVM-testable and keeps
  * this wave compiling against nothing but its own types. Only this adapter
  * references `downloads.DownloadRepository`, and only through the frozen
- * cross-wave surface (`entryFor`, `localFile`, and the entry's documented
+ * cross-wave surface (`entryForNow`, `localFile`, and the entry's documented
  * fields) — nothing about how the repository is built or persisted.
  *
  * Someone owning composition (Graph / MainApplication) installs it once:
@@ -24,14 +24,23 @@ import java.io.File
  */
 class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPlaybackSource {
 
-    override fun localBook(itemId: String): LocalBook? {
+    override fun localBook(itemId: String): LocalBook? = resolve(itemId, null)
+
+    override fun localEpisode(itemId: String, episodeId: String): LocalBook? =
+        resolve(itemId, episodeId)
+
+    /**
+     * One downloaded entry as playback's own type. A null [episodeId] asks for
+     * the BOOK entry — the repository's frozen behaviour, unchanged.
+     */
+    private fun resolve(itemId: String, episodeId: String?): LocalBook? {
         val entry = try {
-            // entryForNow, not entryFor: localBook is a plain function on the
+            // entryForNow, not entryFor: this is a plain function on the
             // playback resolution path and cannot suspend. It answers from the
             // in-memory index, which is why composition (MainApplication) MUST
             // call repository.warm() at startup — before the seed, this returns
             // null and a downloaded book would silently stream.
-            repository.entryForNow(itemId)
+            repository.entryForNow(itemId, episodeId)
         } catch (t: Throwable) {
             // The index is a file on disk; an unreadable one means "not
             // downloaded", never a failed play.
@@ -45,7 +54,9 @@ class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPl
             // would shift every later chapter's offset, so the whole entry is
             // treated as absent and the item streams instead.
             val file = try {
-                repository.localFile(itemId, filename)
+                // Keyed by the ENTRY id, which IS the folder name: the item id
+                // for a book (unchanged), the episode's own key otherwise.
+                repository.localFile(entry.id, filename)
             } catch (t: Throwable) {
                 null
             } ?: return null
@@ -65,8 +76,13 @@ class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPl
         if (tracks.isEmpty()) return null
 
         return LocalBook(
+            // The PODCAST's id, never the entry's: this is what the session, the
+            // progress queues and the resume card all key on.
             itemId = itemId,
-            title = entry.title.toString(),
+            // What is PLAYING gets named — the episode when there is one. An
+            // episode entry's `title` is the podcast's, which is what the
+            // downloads list shows underneath it.
+            title = (entry.episodeTitle?.takeIf { it.isNotBlank() } ?: entry.title).toString(),
             author = entry.author?.toString(),
             duration = entry.duration.toDouble(),
             coverUri = coverUri(entry.coverPath?.toString()),

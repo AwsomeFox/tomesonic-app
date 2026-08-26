@@ -2,6 +2,7 @@ package com.tomesonic.app.wear.data
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -24,13 +25,19 @@ import java.util.UUID
  * The watch's only persistent store: DataStore("tomesonic_wear"), key table in
  * native/wear/ARCHITECTURE.md.
  *
- * v1 has NO watch-side login — server + access token arrive from the paired
- * phone over the Wearable Data Layer and land here. Two paths write them and
- * both go through [applyFromDataLayer] so they can't diverge:
- *  - [DataLayerListenerService], on every phone-side put, and
- *  - [refreshFromDataLayer], reading the DataItem ALREADY on the node (the
+ * Credentials arrive from two places, and the store remembers which:
+ *  - the paired PHONE, over the Wearable Data Layer, through the two paths that
+ *    both funnel into [applyFromDataLayer] so they can't diverge —
+ *    [DataLayerListenerService] on every phone-side put, and
+ *    [refreshFromDataLayer] reading the DataItem ALREADY on the node (the
  *    listener only fires on changes, so an app installed or opened after the
- *    phone logged in would otherwise never see credentials at all).
+ *    phone logged in would otherwise never see credentials at all);
+ *  - the WATCH's own login ([setWatchLogin]), which additionally holds a
+ *    refresh token and can therefore renew itself ([updateAccessToken]).
+ *
+ * The phone stays PRIMARY: its credentials overwrite a watch login on arrival.
+ * Its LOGOUT does not — that is the phone ending the phone's session, and a
+ * watch login is a different ABS session it says nothing about.
  *
  * The DataStore is injected so tests can point it at a temp file; production
  * builds it once via [create] behind Graph's lazy singleton — two live DataStore
@@ -61,38 +68,112 @@ class CredsRepository(private val store: DataStore<Preferences>) {
 
     val lastItem: Flow<LastItem?> = prefs.map { p ->
         val id = p[KEY_LAST_ITEM]?.takeIf { it.isNotBlank() }
-        if (id == null) null else LastItem(id, p[KEY_LAST_EPISODE]?.takeIf { it.isNotBlank() })
+        if (id == null) null else LastItem(
+            id,
+            p[KEY_LAST_EPISODE]?.takeIf { it.isNotBlank() },
+            p[KEY_LAST_TITLE]?.takeIf { it.isNotBlank() },
+            p[KEY_LAST_AUTHOR]?.takeIf { it.isNotBlank() }
+        )
     }.distinctUntilChanged()
 
     /** Wave 3A's OfflineSessionQueue blob — stored here so the key table has one owner. */
     val offlineSessions: Flow<String?> = prefs.map { it[KEY_OFFLINE_SESSIONS] }.distinctUntilChanged()
 
+    /** A phone-mirrored login. The signature v1 callers use, with v1's meaning. */
     suspend fun set(server: String, token: String, userId: String, username: String) {
         store.edit { p ->
             val newServer = normalizeServer(server)
-            val oldServer = p[KEY_SERVER]
-            val oldUser = p[KEY_USER_ID].orEmpty()
-            // A different server — or a different KNOWN user on the same server —
-            // is a different account world: the resume pointer and the offline
-            // progress queue are meaningless there, and the queue is worse than
-            // meaningless — OfflineProgressQueue flushes it under whatever token
-            // is current, which would post account A's listening as account B's.
-            // (The phone guards its own offline queues by session identity for
-            // exactly this reason — utils/progressSync.ts `sid`.) The userId leg
-            // only fires when BOTH sides are non-blank: the phone bridge sends
-            // "" today, and a blank must never read as "changed".
-            val identityChanged =
-                (oldServer != null && oldServer != newServer) ||
-                    (oldUser.isNotBlank() && userId.isNotBlank() && oldUser != userId)
-            if (identityChanged) {
-                p.remove(KEY_LAST_ITEM)
-                p.remove(KEY_LAST_EPISODE)
-                p.remove(KEY_OFFLINE_SESSIONS)
-            }
+            wipeIfIdentityChanged(p, newServer, userId)
             p[KEY_SERVER] = newServer
             p[KEY_TOKEN] = token.trim()
             p[KEY_USER_ID] = userId
             p[KEY_USERNAME] = username
+            // A phone mirror REPLACES a watch login wholesale. The phone sends
+            // an access token from ITS ABS session; a refresh token left behind
+            // belongs to the watch session these credentials just displaced, and
+            // spending it would renew a login the user is no longer in.
+            p.remove(KEY_SOURCE)
+            p.remove(KEY_REFRESH_TOKEN)
+        }
+    }
+
+    /**
+     * The watch's own login. Same identity rules as [set] — a different account
+     * world is a different account world however the credentials arrived — plus
+     * the refresh token that makes the session renewable.
+     */
+    suspend fun setWatchLogin(
+        server: String,
+        token: String,
+        refreshToken: String?,
+        userId: String,
+        username: String
+    ) {
+        store.edit { p ->
+            val newServer = normalizeServer(server)
+            wipeIfIdentityChanged(p, newServer, userId)
+            p[KEY_SERVER] = newServer
+            p[KEY_TOKEN] = token.trim()
+            p[KEY_USER_ID] = userId
+            p[KEY_USERNAME] = username
+            p[KEY_SOURCE] = SOURCE_WATCH
+            // A server with refresh disabled hands back none. This login then
+            // simply has no refresh path — and must not inherit the previous
+            // login's, which would refresh into someone else's session.
+            val rotated = refreshToken?.trim().orEmpty()
+            if (rotated.isEmpty()) p.remove(KEY_REFRESH_TOKEN) else p[KEY_REFRESH_TOKEN] = rotated
+        }
+    }
+
+    /**
+     * A refresh result: the same session, a newer access token. Deliberately
+     * NOT a login — no identity wipe, because nothing about the account changed
+     * and wiping here would drop the resume pointer and the offline queue every
+     * time a token aged out.
+     *
+     * A missing rotation is not an empty rotation: ABS rotates the refresh token
+     * on some refreshes and not others, and an absent one means the token that
+     * just worked still works (the phone's utils/api.ts makes the same call).
+     */
+    suspend fun updateAccessToken(token: String, refreshToken: String?) {
+        val newToken = token.trim()
+        if (newToken.isEmpty()) return
+        store.edit { p ->
+            // Nothing stored is nothing to renew: a refresh that landed after a
+            // logout must not resurrect the credentials the logout removed.
+            if ((p[KEY_SERVER] ?: "").isBlank() || (p[KEY_TOKEN] ?: "").isBlank()) return@edit
+            p[KEY_TOKEN] = newToken
+            val rotated = refreshToken?.trim().orEmpty()
+            if (rotated.isNotEmpty()) p[KEY_REFRESH_TOKEN] = rotated
+        }
+    }
+
+    /**
+     * The identity-change wipe, in ONE place so the two login paths cannot drift
+     * apart on what counts as a new account.
+     *
+     * A different server — or a different KNOWN user on the same server — is a
+     * different account world: the resume pointer and the offline progress queue
+     * are meaningless there, and the queue is worse than meaningless —
+     * OfflineProgressQueue flushes it under whatever token is current, which
+     * would post account A's listening as account B's. (The phone guards its own
+     * offline queues by session identity for exactly this reason —
+     * utils/progressSync.ts `sid`.) The userId leg only fires when BOTH sides
+     * are non-blank: the phone bridge sends "" today, and a blank must never
+     * read as "changed".
+     */
+    private fun wipeIfIdentityChanged(p: MutablePreferences, newServer: String, userId: String) {
+        val oldServer = p[KEY_SERVER]
+        val oldUser = p[KEY_USER_ID].orEmpty()
+        val identityChanged =
+            (oldServer != null && oldServer != newServer) ||
+                (oldUser.isNotBlank() && userId.isNotBlank() && oldUser != userId)
+        if (identityChanged) {
+            p.remove(KEY_LAST_ITEM)
+            p.remove(KEY_LAST_EPISODE)
+            p.remove(KEY_LAST_TITLE)
+            p.remove(KEY_LAST_AUTHOR)
+            p.remove(KEY_OFFLINE_SESSIONS)
         }
     }
 
@@ -105,15 +186,22 @@ class CredsRepository(private val store: DataStore<Preferences>) {
      * the logout — same trade the phone makes with its sid-guarded queues.
      */
     suspend fun clear() {
-        store.edit { p ->
-            p.remove(KEY_SERVER)
-            p.remove(KEY_TOKEN)
-            p.remove(KEY_USER_ID)
-            p.remove(KEY_USERNAME)
-            p.remove(KEY_LAST_ITEM)
-            p.remove(KEY_LAST_EPISODE)
-            p.remove(KEY_OFFLINE_SESSIONS)
-        }
+        store.edit { clearInto(it) }
+    }
+
+    /** The logout removals, shared with [applyFromDataLayer]'s conditional one. */
+    private fun clearInto(p: MutablePreferences) {
+        p.remove(KEY_SERVER)
+        p.remove(KEY_TOKEN)
+        p.remove(KEY_USER_ID)
+        p.remove(KEY_USERNAME)
+        p.remove(KEY_SOURCE)
+        p.remove(KEY_REFRESH_TOKEN)
+        p.remove(KEY_LAST_ITEM)
+        p.remove(KEY_LAST_EPISODE)
+        p.remove(KEY_LAST_TITLE)
+        p.remove(KEY_LAST_AUTHOR)
+        p.remove(KEY_OFFLINE_SESSIONS)
     }
 
     /**
@@ -140,15 +228,29 @@ class CredsRepository(private val store: DataStore<Preferences>) {
         store.edit { it[KEY_SPEED] = speed }
     }
 
-    suspend fun setLastItem(itemId: String?, episodeId: String?) {
+    suspend fun setLastItem(
+        itemId: String?,
+        episodeId: String?,
+        title: String? = null,
+        author: String? = null
+    ) {
         store.edit { p ->
             if (itemId.isNullOrBlank()) {
                 p.remove(KEY_LAST_ITEM)
                 p.remove(KEY_LAST_EPISODE)
+                p.remove(KEY_LAST_TITLE)
+                p.remove(KEY_LAST_AUTHOR)
             } else {
                 p[KEY_LAST_ITEM] = itemId
                 if (episodeId.isNullOrBlank()) p.remove(KEY_LAST_EPISODE)
                 else p[KEY_LAST_EPISODE] = episodeId
+                // Display fields for renderers that live outside the app process
+                // (the tile). Blank clears rather than writes, so a caller
+                // without a title can't erase a good one with "".
+                if (title.isNullOrBlank()) p.remove(KEY_LAST_TITLE)
+                else p[KEY_LAST_TITLE] = title
+                if (author.isNullOrBlank()) p.remove(KEY_LAST_AUTHOR)
+                else p[KEY_LAST_AUTHOR] = author
             }
         }
     }
@@ -162,6 +264,14 @@ class CredsRepository(private val store: DataStore<Preferences>) {
      * the listener and [refreshFromDataLayer] so "logout" can't mean two things.
      * Blank server or token IS the logout signal: the phone clears by putting
      * empty strings, deliberately not by deleting the DataItem.
+     *
+     * Precedence, per the v2 contract:
+     *  - non-blank credentials ALWAYS apply. The phone is the primary source;
+     *    its login overwrites a watch login (and drops the watch's refresh
+     *    token with it — see [set]).
+     *  - a logout applies ONLY to a phone-sourced session. Signing out on the
+     *    phone ends the phone's ABS session; the watch's own login is a
+     *    separate one, and ending it is [clear]'s job, from Settings.
      */
     suspend fun applyFromDataLayer(
         server: String?,
@@ -171,10 +281,16 @@ class CredsRepository(private val store: DataStore<Preferences>) {
     ) {
         val normalized = normalizeServer(server ?: "")
         val trimmedToken = (token ?: "").trim()
-        if (normalized.isEmpty() || trimmedToken.isEmpty()) {
-            clear()
-        } else {
+        if (normalized.isNotEmpty() && trimmedToken.isNotEmpty()) {
             set(normalized, trimmedToken, userId ?: "", username ?: "")
+            return
+        }
+        store.edit { p ->
+            // Read the source INSIDE the edit that acts on it. Deciding first
+            // and clearing after would let a watch login that landed in between
+            // be wiped by a decision taken before it existed.
+            if (sourceFrom(p) != CredsSource.PHONE) return@edit
+            clearInto(p)
         }
     }
 
@@ -226,8 +342,26 @@ class CredsRepository(private val store: DataStore<Preferences>) {
         val server = normalizeServer(p[KEY_SERVER] ?: "")
         val token = (p[KEY_TOKEN] ?: "").trim()
         if (server.isEmpty() || token.isEmpty()) return null
-        return Creds(server, token, p[KEY_USER_ID] ?: "", p[KEY_USERNAME] ?: "")
+        val source = sourceFrom(p)
+        return Creds(
+            server = server,
+            token = token,
+            userId = p[KEY_USER_ID] ?: "",
+            username = p[KEY_USERNAME] ?: "",
+            source = source,
+            // Only a watch login has one. Reading it for a phone mirror would
+            // resurrect a stale row into a session it does not belong to.
+            refreshToken = if (source == CredsSource.WATCH) {
+                p[KEY_REFRESH_TOKEN]?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+        )
     }
+
+    /** Absent marker = phone: every v1 row, and every phone mirror since. */
+    private fun sourceFrom(p: Preferences): CredsSource =
+        if (p[KEY_SOURCE] == SOURCE_WATCH) CredsSource.WATCH else CredsSource.PHONE
 
     companion object {
         /** Data Layer contract — MUST match the phone's WearBridgeModule. */
@@ -240,16 +374,28 @@ class CredsRepository(private val store: DataStore<Preferences>) {
 
         const val DEFAULT_SPEED = 1.0f
 
+        /**
+         * The only `abs_source` value ever WRITTEN. A phone mirror removes the
+         * key instead of writing "phone", so absent and phone stay one state
+         * rather than two that could disagree; anything that is not this marker
+         * reads back as [CredsSource.PHONE].
+         */
+        const val SOURCE_WATCH = "watch"
+
         private const val DATASTORE_NAME = "tomesonic_wear"
 
         private val KEY_SERVER = stringPreferencesKey("abs_server")
         private val KEY_TOKEN = stringPreferencesKey("abs_token")
         private val KEY_USER_ID = stringPreferencesKey("abs_user_id")
         private val KEY_USERNAME = stringPreferencesKey("abs_username")
+        private val KEY_SOURCE = stringPreferencesKey("abs_source")
+        private val KEY_REFRESH_TOKEN = stringPreferencesKey("abs_refresh_token")
         private val KEY_DEVICE_ID = stringPreferencesKey("device_id")
         private val KEY_SPEED = floatPreferencesKey("playback_speed")
         private val KEY_LAST_ITEM = stringPreferencesKey("last_item_id")
         private val KEY_LAST_EPISODE = stringPreferencesKey("last_episode_id")
+        private val KEY_LAST_TITLE = stringPreferencesKey("last_item_title")
+        private val KEY_LAST_AUTHOR = stringPreferencesKey("last_item_author")
         private val KEY_OFFLINE_SESSIONS = stringPreferencesKey("offline_sessions")
 
         /**

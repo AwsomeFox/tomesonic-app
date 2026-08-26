@@ -31,11 +31,13 @@
         android:theme="@android:style/Theme.DeviceDefault"
         android:usesCleartextTraffic="true">
 
-        <!-- false: v1 gets its server + token from the paired phone app over the
-             Wearable Data Layer, so the watch app is useless on its own. -->
+        <!-- true since v2: the watch can sign in on its own (ConnectScreen's
+             RemoteInput flow + watch-owned refresh token), so it is fully
+             functional untethered — which is exactly what this flag promises
+             Play. The phone mirror remains the primary, zero-typing path. -->
         <meta-data
             android:name="com.google.android.wearable.standalone"
-            android:value="false" />
+            android:value="true" />
 
         <!-- Later waves declare their own services next to the classes that
              land (an unimplemented <service> fails lintVitalRelease with
@@ -86,6 +88,43 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+
+        <!-- Continue Listening tile. exported=true is REQUIRED: the tile host
+             is a system surface binding in from outside this app; the
+             BIND_TILE_PROVIDER permission is what narrows that exposure to the
+             system. Content comes from the DataStore snapshot only — no
+             network on a render path. -->
+        <service
+            android:name="com.tomesonic.app.wear.tile.ContinueListeningTileService"
+            android:exported="true"
+            android:label="@string/tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/tile_preview" />
+        </service>
+
+        <!-- Resume complication. UPDATE_PERIOD_SECONDS 0 because the content is
+             STATIC ("Resume" never changes) — a watch face renders several of
+             these at once and a polling one would cost battery for nothing. -->
+        <service
+            android:name="com.tomesonic.app.wear.complication.ResumeComplicationService"
+            android:exported="true"
+            android:label="@string/complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,SMALL_IMAGE" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
+        </service>
 
         <activity
             android:name="com.tomesonic.app.wear.MainActivity"

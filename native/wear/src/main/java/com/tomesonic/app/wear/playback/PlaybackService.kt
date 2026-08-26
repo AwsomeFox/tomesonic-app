@@ -10,10 +10,12 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -42,9 +44,10 @@ import kotlinx.coroutines.launch
  * the `file://` uris of a downloaded book resolve through the same player with
  * the same queue, seek and position semantics.
  *
- * v1 keeps media3's stock notification provider deliberately: the default
- * layout is already correct on Wear (and creates its own channel), and a custom
- * provider is a lot of surface for no behaviour we need yet.
+ * The notification is [WearMediaNotificationProvider]'s rather than media3's
+ * stock one, for the single reason that a Wear Ongoing Activity can only attach
+ * to the notification THIS service posts. It keeps media3's channel, id and
+ * layout, so nothing else about the notification moves.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -117,10 +120,32 @@ class PlaybackService : MediaSessionService() {
             scope = scope
         )
 
+        val openApp = openAppIntent()
+
         mediaSession = MediaSession.Builder(this, player)
             .setCallback(SessionCallback())
-            .setSessionActivity(openAppIntent())
+            .setSessionActivity(openApp)
+            // Notification artwork rides the SAME authorized stack as the audio.
+            // media3's stock loader builds its own http client, so a streamed
+            // book's cover came back 401 and the notification showed none (the
+            // v1 gap). `dataSources`, not the bare OkHttp factory: a DOWNLOADED
+            // book's cover is a `file://` uri, which OkHttp alone cannot open.
+            // The Context constructor is the trap here — it would quietly build
+            // an unauthorized DefaultDataSource of its own.
+            .setBitmapLoader(
+                CacheBitmapLoader(
+                    DataSourceBitmapLoader(
+                        DataSourceBitmapLoader.DEFAULT_EXECUTOR_SERVICE.get(),
+                        dataSources
+                    )
+                )
+            )
             .build()
+
+        // Installed before anything can play: media3 asks the provider for a
+        // notification while promoting this service to the foreground, and a
+        // provider that isn't there yet is a promotion with nothing to post.
+        setMediaNotificationProvider(WearMediaNotificationProvider(this, openApp))
 
         registerNetworkCallback()
         // Flush trigger #1: service start. Anything listened offline lands as

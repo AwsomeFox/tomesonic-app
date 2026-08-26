@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +20,9 @@ import org.robolectric.annotation.Config
  * a Context. The rule every case pins is data/Models.kt's: a field the file
  * doesn't carry costs that FIELD, a malformed row costs that ROW, and neither
  * ever costs an exception. This file survives app upgrades and process kills,
- * so "written by an older build" and "half-written" are the normal cases.
+ * so "written by an older build" and "half-written" are the normal cases —
+ * which is why the v1-schema rows below are tested as their own section rather
+ * than as a footnote.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -38,6 +41,20 @@ class DownloadEntryTest {
         bytes = 734003200L
     )
 
+    private val episodeEntry = DownloadEntry(
+        id = "li_pod-ep-ep_42",
+        // The PODCAST's title; the episode's own is beside it.
+        title = "The Show",
+        author = "Host Person",
+        duration = 1800.0,
+        coverPath = "/data/user/0/com.tomesonic.app/files/downloads/li_pod-ep-ep_42/cover.jpg",
+        tracks = listOf(DownloadTrack("track_0.mp3", 0.0, 1800.0, "/api/items/li_pod/file/7001")),
+        bytes = 24_000_000L,
+        libraryItemId = "li_pod",
+        episodeId = "ep_42",
+        episodeTitle = "Episode 42"
+    )
+
     // ---- round trips -------------------------------------------------------
 
     @Test
@@ -48,9 +65,20 @@ class DownloadEntryTest {
 
     @Test
     fun roundTripsTheWholeArrayForm() {
-        val entries = listOf(fullEntry, fullEntry.copy(id = "li_book2", title = "Ubik"))
+        // copy() does not re-run `libraryItemId = id`'s default; a book's two
+        // ids are the same string.
+        val entries = listOf(
+            fullEntry,
+            fullEntry.copy(id = "li_book2", libraryItemId = "li_book2", title = "Ubik")
+        )
         val text = DownloadEntry.toJsonArray(entries).toString()
         assertEquals(entries, DownloadEntry.parseList(text))
+    }
+
+    @Test
+    fun roundTripsAnEpisodeEntry() {
+        val parsed = DownloadEntry.fromJson(JSONObject(episodeEntry.toJson().toString()))
+        assertEquals(episodeEntry, parsed)
     }
 
     @Test
@@ -179,5 +207,122 @@ class DownloadEntryTest {
         val entries = DownloadEntry.parseList(raw)!!
         assertEquals(1, entries.size)
         assertEquals(fullEntry, entries[0])
+    }
+
+    // ---- schema v1 -> v2 ---------------------------------------------------
+
+    @Test
+    fun aRowWrittenBeforeV2IsExactlyTheBookItAlwaysWas() {
+        // The whole back-compat rule: no libraryItemId, no episode keys — an
+        // upgraded watch must keep playing (and keep counting) every book it
+        // already has on disk.
+        val raw = """
+            { "id": "li_book1", "title": "Dune", "author": "Frank Herbert",
+              "duration": 12345.5, "bytes": 734003200,
+              "tracks": [ { "filename": "track_0.mp3", "startOffset": 0, "duration": 3600 } ] }
+        """.trimIndent()
+        val entry = DownloadEntry.fromJson(JSONObject(raw))!!
+        assertEquals("li_book1", entry.id)
+        assertEquals("li_book1", entry.libraryItemId)
+        assertNull(entry.episodeId)
+        assertNull(entry.episodeTitle)
+        assertTrue(entry.isFor("li_book1", null))
+        // ...and the folder it names is the one v1 created.
+        assertEquals("li_book1", DownloadEntry.entryId("li_book1", null))
+    }
+
+    @Test
+    fun aBookWritesNoEpisodeKeysAndAlwaysWritesItsItemId() {
+        val json = fullEntry.toJson()
+        assertEquals("li_book1", json.optString("libraryItemId"))
+        assertFalse(json.has("episodeId"))
+        assertFalse(json.has("episodeTitle"))
+    }
+
+    @Test
+    fun aMixedIndexKeepsBothSchemasAndLosesOnlyTheBadRow() {
+        val v1Book = JSONObject("""{ "id": "li_v1", "title": "Ubik", "bytes": 10 }""")
+        val raw = JSONArray()
+            .put(v1Book)
+            .put(JSONObject("""{ "episodeId": "ep_1", "title": "no id" }"""))
+            .put(episodeEntry.toJson())
+            .toString()
+        val entries = DownloadEntry.parseList(raw)!!
+        assertEquals(2, entries.size)
+        assertEquals("li_v1", entries[0].libraryItemId)
+        assertNull(entries[0].episodeId)
+        assertEquals(episodeEntry, entries[1])
+    }
+
+    @Test
+    fun isForSeparatesABookFromItsOwnEpisodes() {
+        // The reason an item id alone is not the answer: a podcast and its
+        // episode both name the same libraryItemId.
+        assertTrue(episodeEntry.isFor("li_pod", "ep_42"))
+        assertFalse(episodeEntry.isFor("li_pod", null))
+        assertFalse(episodeEntry.isFor("li_pod", "ep_43"))
+        assertFalse(episodeEntry.isFor("li_other", "ep_42"))
+        assertTrue(fullEntry.isFor("li_book1", null))
+        // Blank is absent — the repository's null-or-blank convention.
+        assertTrue(fullEntry.isFor("li_book1", ""))
+        assertFalse(fullEntry.isFor("li_book1", "ep_42"))
+    }
+
+    // ---- entry ids ---------------------------------------------------------
+
+    @Test
+    fun aBooksEntryIdIsItsItemIdUntouched() {
+        assertEquals("li_book1", DownloadEntry.entryId("li_book1", null))
+        // Blank reads as "no episode", which is what keeps a stray "" from
+        // minting a second folder for the same book.
+        assertEquals("li_book1", DownloadEntry.entryId("li_book1", ""))
+        assertEquals("li_book1", DownloadEntry.entryId("li_book1", "   "))
+    }
+
+    @Test
+    fun anAlreadySafeEpisodeIdIsKeptVerbatim() {
+        // ABS ids are nanoids: the common case must stay readable on disk and
+        // identical between builds.
+        assertEquals("li_pod-ep-ep_42", DownloadEntry.entryId("li_pod", "ep_42"))
+        assertEquals("ep_42", DownloadEntry.sanitizeSegment("ep_42"))
+        assertEquals("A-Z.a-z_0-9", DownloadEntry.sanitizeSegment("A-Z.a-z_0-9"))
+    }
+
+    @Test
+    fun aDirtyEpisodeIdIsFlattenedAndHashed() {
+        val id = DownloadEntry.sanitizeSegment("https://feed/ep 1")
+        // Every disallowed character becomes '_', and the hash marks that
+        // something WAS replaced.
+        assertTrue(id.startsWith("https___feed_ep_1-"))
+        assertEquals("https___feed_ep_1".length + 9, id.length)
+        // A single plain path component: nothing here can escape a folder.
+        assertTrue(DownloadWorker.isSafeName(id))
+        assertTrue(DownloadWorker.isSafeName(DownloadEntry.entryId("li_pod", "https://feed/ep 1")))
+    }
+
+    @Test
+    fun sanitisingIsDeterministicAcrossCalls() {
+        // The id IS the folder name — one that changed between runs would orphan
+        // a folder full of audio and re-download it.
+        assertEquals(
+            DownloadEntry.sanitizeSegment("tag:feed,2026:ep/1"),
+            DownloadEntry.sanitizeSegment("tag:feed,2026:ep/1")
+        )
+    }
+
+    @Test
+    fun twoEpisodeIdsThatFlattenTheSameStillGetTheirOwnFolder() {
+        // The collision the hash exists for: `ep/1` and `ep:1` both flatten to
+        // `ep_1`, and one folder for two episodes is one episode's audio played
+        // as the other's.
+        val slash = DownloadEntry.entryId("li_pod", "ep/1")
+        val colon = DownloadEntry.entryId("li_pod", "ep:1")
+        assertNotEquals(slash, colon)
+        assertTrue(slash.startsWith("li_pod-ep-ep_1-"))
+        assertTrue(colon.startsWith("li_pod-ep-ep_1-"))
+        // ...and neither may collide with an episode LITERALLY called ep_1,
+        // which is the one id that keeps its exact name.
+        assertEquals("li_pod-ep-ep_1", DownloadEntry.entryId("li_pod", "ep_1"))
+        assertNotEquals(slash, DownloadEntry.entryId("li_pod", "ep_1"))
     }
 }

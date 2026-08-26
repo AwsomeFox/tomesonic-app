@@ -29,7 +29,7 @@ Nothing in the listing, screenshots, or release notes may promise more than that
 | versionCode | stamped by `native/scripts/set-version.mjs` | derived: phone + `1_000_000` |
 | minSdk / targetSdk | Expo defaults (`rootProject.ext`) | 30 (Wear OS 3+) / **35**, pinned literally |
 | Play device filter | — | `<uses-feature android:name="android.hardware.type.watch" />` |
-| Standalone | — | `com.google.android.wearable.standalone` = **false** |
+| Standalone | — | `com.google.android.wearable.standalone` = **true** (since v2 — watch sign-in) |
 
 ## One listing, two artifacts
 
@@ -120,28 +120,28 @@ revisions of that page — read it, don't trust this table. Honest status for
 | Ongoing Activity (or Live Update) while playing | Specified in `native/wear/ARCHITECTURE.md` and `androidx.wear:wear-ongoing` is a dependency — confirm the chip actually shows on the watch face while playing |
 | Playback state preserved / restored when the app leaves the foreground | Playback lives in a `MediaSessionService`; position resumes from the watch's own store |
 | Touch targets and font sizes usable on a watch | Wear M3 defaults; check the custom player controls specifically |
-| No username/password entry on the watch | **By design** — creds arrive from the paired phone over the Data Layer. This is the recommended pattern, not a shortcut |
-| Non-standalone apps: the companion app must actually connect | The phone app writes `/tomesonic/creds`; the watch's `connect` screen is the failure state |
+| Credential entry on the watch | Phone-first (Data Layer mirror, the recommended pattern); since v2 the watch ALSO offers its own sign-in via the platform RemoteInput flow — no custom text fields |
+| Standalone apps must work phone-free | Watch sign-in + streaming + downloads + offline playback all run with no companion; the `connect` screen offers both paths |
 | Listing describes what the watch app does (offline playback etc.), no "Android Wear" wording, no invented features | See [Store assets](#3-store-assets-for-the-watch) |
 
-**What `standalone=false` actually means.** Repo fact: it's declared in
-`native/wear/src/main/AndroidManifest.xml` because v1 gets its server URL and ABS
-access token from the phone (the refresh token is deliberately never mirrored —
-see `native/WEAR_OS.md`). Consequences worth knowing before you write listing
-copy
+**What `standalone=true` actually means (since v2).** Repo fact: declared in
+`native/wear/src/main/AndroidManifest.xml` because the watch can now sign in on
+its own (ConnectScreen's three-step RemoteInput flow, watch-owned refresh
+token). The phone mirror remains the primary, zero-typing path and its
+credentials take precedence. Consequences worth knowing before you write
+listing copy
 ([standalone apps](https://developer.android.com/training/wearables/apps/standalone-apps)):
 
-- Play does **not** serve the app to untethered watches (watches with no paired
-  handheld). That is correct for this app — it is useless without the phone app.
-- Play does **not** automatically show users a "requires a companion app" notice.
-  If you want that disclosure, it has to be in the store listing text and in the
-  app itself. The app already covers itself: with no creds the watch shows the
-  `connect` screen ("Open TomeSonic on your phone to connect"). Say the same
-  thing in the listing — a one-liner along the lines of *"Requires the TomeSonic
-  phone app; sign in on the phone once and the watch connects itself"* prevents
-  the 1-star "won't log in" reviews.
-- The watch app can still be installed **before** the phone app. The `connect`
-  screen is the whole of that story in v1; don't claim more.
+- Play now **also serves the app to untethered watches** (no paired handheld,
+  or an iOS-paired watch). That is honest: sign-in, browse, stream, download
+  and offline playback all work with no phone.
+- Wear review for a standalone app checks it genuinely works phone-free — the
+  watch sign-in is the answer if a reviewer asks.
+- Listing copy: lead with the easy path, keep the escape hatch a footnote —
+  *"Sign in once on the TomeSonic phone app and the watch connects itself, or
+  sign in directly on the watch."*
+- The watch app can still be installed **before** the phone app; the `connect`
+  screen offers both paths.
 
 Offline playback: real, via downloads to the watch (`filesDir/downloads/…`), with
 progress queued locally and flushed to the server on reconnect. That is worth
@@ -306,9 +306,9 @@ play the downloaded copy with the phone powered off / out of range, then bring t
 phone back and confirm progress lands on the server.
 
 If the app doesn't appear on the watch at all, the usual causes are, in order: the
-form-factor opt-in isn't done, the Wear review hasn't passed for that track, the
-account isn't on the tester list, or the watch is untethered (`standalone=false`
-apps aren't served to untethered watches).
+form-factor opt-in isn't done, the Wear review hasn't passed for that track, or
+the account isn't on the tester list. (Since v2 `standalone=true`, an untethered
+watch is no longer a cause — Play serves it there too.)
 
 ### 2. Sideload the debug APK
 

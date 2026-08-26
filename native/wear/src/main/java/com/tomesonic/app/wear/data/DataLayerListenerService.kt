@@ -5,6 +5,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.WearableListenerService
 import com.tomesonic.app.wear.Graph
+import com.tomesonic.app.wear.tile.TileRefresh
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -12,10 +13,11 @@ import kotlinx.coroutines.runBlocking
  * DataItem at `/tomesonic/creds`; this turns it into stored credentials.
  *
  * Logout arrives as the SAME path with empty server/token (deliberately not a
- * deleteDataItems — deletion events are unreliable across reconnects), which
- * CredsRepository.applyFromDataLayer reads as clear(). Both directions go
- * through that one function so the listener and the app-open refresh can't
- * disagree about what "no creds" looks like.
+ * deleteDataItems — deletion events are unreliable across reconnects). Both
+ * directions go through CredsRepository.applyFromDataLayer so the listener and
+ * the app-open refresh can't disagree about what "no creds" looks like — and so
+ * the v2 precedence rule has ONE owner: phone credentials always win, a phone
+ * logout ends a phone-sourced session only, and a watch-owned login survives it.
  */
 class DataLayerListenerService : WearableListenerService() {
 
@@ -42,6 +44,10 @@ class DataLayerListenerService : WearableListenerService() {
                         map.getString(CredsRepository.DL_KEY_USERNAME)
                     )
                 }
+                // The Continue Listening tile renders creds + resume pointer,
+                // and BOTH can change here (logout clears the pointer, an
+                // account switch wipes it). Failures are swallowed inside.
+                TileRefresh.requestUpdate(applicationContext)
             } catch (t: Throwable) {
                 // One malformed event must not abort the rest of the buffer, and
                 // must never crash the app the user is listening on.

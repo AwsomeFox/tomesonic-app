@@ -148,6 +148,19 @@ dependencies {
     implementation 'androidx.wear:wear:1.3.0'
     implementation 'androidx.wear:wear-ongoing:1.0.0'
 
+    // v2: tile + complication + on-watch input. protolayout-material is the
+    // M2.5 component set ON PURPOSE — protolayout-material3 has no stable
+    // release, so the tile takes its colors from ui/theme/Color.kt instead.
+    implementation 'androidx.wear.tiles:tiles:1.6.2'
+    implementation 'androidx.wear.protolayout:protolayout:1.4.2'
+    implementation 'androidx.wear.protolayout:protolayout-expression:1.4.2'
+    implementation 'androidx.wear.protolayout:protolayout-material:1.4.2'
+    implementation 'androidx.wear.watchface:watchface-complications-data-source-ktx:1.3.0'
+    implementation 'androidx.wear:wear-input:1.1.0'
+    // SuspendToFutureAdapter — TileService speaks ListenableFuture, the app
+    // speaks coroutines.
+    implementation 'androidx.concurrent:concurrent-futures-ktx:1.2.0'
+
     // JVM unit tests (src/test). Versions identical to :app — the robolectric
     // one is mirrored in .github/workflows/android-unit-tests.yml (android-all
     // jar cache key); bump all three together.

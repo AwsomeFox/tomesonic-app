@@ -12,6 +12,7 @@ import com.tomesonic.app.wear.data.Chapter
 import com.tomesonic.app.wear.data.ChapterMath
 import com.tomesonic.app.wear.data.CredsRepository
 import com.tomesonic.app.wear.data.PlaySession
+import com.tomesonic.app.wear.tile.TileRefresh
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,6 +54,17 @@ data class LocalBook(
 /** The one thing playback needs from downloads. See DownloadsLocalSource. */
 fun interface LocalPlaybackSource {
     fun localBook(itemId: String): LocalBook?
+
+    /**
+     * One downloaded EPISODE, as the same [LocalBook] shape (its `itemId` is the
+     * podcast's — the episode id stays with the caller, which is what keeps the
+     * progress ids right).
+     *
+     * Defaulted, so this stays a `fun interface` with one abstract member and
+     * every existing SAM lambda keeps meaning "books only, nothing episodic on
+     * disk" — which is exactly the v1 behaviour.
+     */
+    fun localEpisode(itemId: String, episodeId: String): LocalBook? = null
 }
 
 /** Where the downloads package plugs itself in — see DownloadsLocalSource. */
@@ -177,7 +189,8 @@ object MediaItems {
  *
  * The local-vs-stream decision is made ONCE, here, and never revisited:
  *  - downloaded  -> ALWAYS the local files, progress into OfflineProgressQueue.
- *                   Never streams a book we already have; never needs the network.
+ *                   Never streams a book (or an episode) we already have; never
+ *                   needs the network.
  *  - otherwise   -> requires the network. `POST /api/items/{id}/play`, stream the
  *                   session's tracks, progress via `/api/session/{id}/sync`.
  *
@@ -255,7 +268,9 @@ class SessionManager(
         PlaybackState.set(ready.session)
         // The home screen's resume card reads this; write it only once the queue
         // is actually loaded so a failed play can't repoint it.
-        credsRepository.setLastItem(itemId, episodeId)
+        credsRepository.setLastItem(itemId, episodeId, ready.session.title, ready.session.author)
+        // The Continue Listening tile shows exactly what was just written.
+        TileRefresh.requestUpdate(Graph.applicationContext)
         return PlayResult.Ok
     }
 
@@ -296,8 +311,9 @@ class SessionManager(
          * be tested on its own.
          *
          * Order matters: the download check comes FIRST and short-circuits, so a
-         * downloaded book never touches the network — not for the session, not
-         * for the cover — and plays identically whether the watch is online.
+         * downloaded book — or, since v2, a downloaded EPISODE — never touches
+         * the network, not for the session and not for the cover, and plays
+         * identically whether the watch is online.
          */
         internal suspend fun resolve(
             itemId: String,
@@ -309,10 +325,15 @@ class SessionManager(
             coverUrl: (String) -> String?,
             resolveUrl: (String) -> String?
         ): Resolution {
-            // Podcast EPISODES are never downloaded in v1 (contract non-goal), so
-            // only a bare item id can resolve locally — asking for a downloaded
-            // podcast's episode must still stream that episode.
-            val book = if (episodeId.isNullOrBlank()) local?.localBook(itemId) else null
+            // An episode resolves against ITS OWN entry, never the podcast's:
+            // asking for an episode the watch doesn't have must still stream that
+            // episode even when some other episode (or the item) is downloaded.
+            val episode = episodeId?.takeIf { it.isNotBlank() }
+            val book = if (episode == null) {
+                local?.localBook(itemId)
+            } else {
+                local?.localEpisode(itemId, episode)
+            }
             if (book != null) {
                 if (book.tracks.isEmpty()) return Resolution.Failed(PlayResult.NoTracks)
                 val duration = if (book.duration > 0.0) {
@@ -323,8 +344,12 @@ class SessionManager(
                 val session = ActiveSession(
                     serverSessionId = null,
                     itemId = book.itemId,
-                    episodeId = null,
-                    mediaType = "book",
+                    // Carried into the session because the syncer reads it: the
+                    // offline queues key on (item, episode), which is what makes
+                    // the `wear-local_<item>-<ep>_<date>` stats id and the
+                    // per-episode resume marker come out right.
+                    episodeId = episode,
+                    mediaType = if (episode == null) "book" else "podcast",
                     title = book.title,
                     author = book.author,
                     duration = duration,
@@ -337,7 +362,7 @@ class SessionManager(
                     items = MediaItems.forLocal(book),
                     // No server session offline: the syncer's own `local_pos_`
                     // marker is the resume point.
-                    startSeconds = queue.resumePosition(book.itemId, null) ?: 0.0
+                    startSeconds = queue.resumePosition(book.itemId, episode) ?: 0.0
                 )
             }
 

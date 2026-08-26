@@ -47,7 +47,22 @@ class DownloadRepositoryTest {
         tracks = listOf(DownloadTrack("track_0.mp3", 0.0, 3600.0, "/api/items/li_book1/file/9000")),
         bytes = 700L
     )
-    private val ubik = dune.copy(id = "li_book2", title = "Ubik", bytes = 300L)
+    // copy() does NOT re-run `libraryItemId = id`'s default, and a book whose
+    // two ids disagree is not a shape the worker can write — so say both.
+    private val ubik = dune.copy(id = "li_book2", libraryItemId = "li_book2", title = "Ubik", bytes = 300L)
+
+    private val episode = DownloadEntry(
+        id = "li_pod-ep-ep_42",
+        title = "The Show",
+        author = "Host Person",
+        duration = 1800.0,
+        coverPath = null,
+        tracks = listOf(DownloadTrack("track_0.mp3", 0.0, 1800.0, "/api/items/li_pod/file/7001")),
+        bytes = 500L,
+        libraryItemId = "li_pod",
+        episodeId = "ep_42",
+        episodeTitle = "Episode 42"
+    )
 
     @Before
     fun setUp() {
@@ -130,6 +145,126 @@ class DownloadRepositoryTest {
         index.upsert(dune)
         index.upsert(ubik)
         assertEquals(1000L, repo.totalBytes())
+    }
+
+    // ---- episode entries ---------------------------------------------------
+
+    @Test
+    fun anEpisodeIsFoundByItsOwnKeyAndNeverByTheItemsAlone() = runBlocking {
+        index.upsert(episode)
+
+        assertEquals(episode, repo.entryFor("li_pod", "ep_42"))
+        // The frozen single-argument call is the BOOK's, and the podcast itself
+        // was never downloaded — one downloaded episode must not make its whole
+        // podcast look local (which would stream nothing and play one file).
+        assertNull(repo.entryFor("li_pod"))
+        assertNull(repo.entryFor("li_pod", null))
+        assertNull(repo.entryFor("li_pod", "ep_43"))
+        // ...and an episode's key is not an item id either.
+        assertNull(repo.entryFor("li_pod-ep-ep_42"))
+    }
+
+    @Test
+    fun aDownloadedBookAndItsOwnEpisodesCoexist() = runBlocking {
+        // The v1 answer for the item must survive an episode of the same item
+        // being downloaded beside it.
+        index.upsert(dune)
+        index.upsert(episode.copy(id = "li_book1-ep-ep_1", libraryItemId = "li_book1", episodeId = "ep_1"))
+
+        assertEquals(dune, repo.entryFor("li_book1"))
+        assertEquals("li_book1-ep-ep_1", repo.entryFor("li_book1", "ep_1")?.id)
+        assertNull(repo.entryFor("li_book1", "ep_2"))
+    }
+
+    @Test
+    fun entryForNowAnswersForEpisodesOnceWarmed() = runBlocking {
+        index.upsert(episode)
+        val cold = DownloadRepository(
+            ApplicationProvider.getApplicationContext<Application>(),
+            DownloadIndex(File(tempFolder.root, "downloads_index.json")),
+            root
+        )
+        assertNull(cold.entryForNow("li_pod", "ep_42"))
+        cold.warm()
+        assertEquals(episode, cold.entryForNow("li_pod", "ep_42"))
+        assertNull(cold.entryForNow("li_pod"))
+    }
+
+    @Test
+    fun anEpisodesFilesLiveUnderItsOwnEntryFolder() {
+        // The ownership rule the delete depends on: one folder per entry, keyed
+        // by the entry id, never shared with the book's.
+        assertEquals(File(root, "li_pod-ep-ep_42"), repo.itemDir("li_pod-ep-ep_42"))
+        val audio = write("li_pod-ep-ep_42", "track_0.mp3", 128)
+        assertEquals(audio, repo.localFile("li_pod-ep-ep_42", "track_0.mp3"))
+        assertNull(repo.localFile("li_pod", "track_0.mp3"))
+    }
+
+    @Test
+    fun deletingAnEpisodeTakesNothingElseWithIt() = runBlocking {
+        write("li_pod", "cover.jpg", 30)
+        write("li_pod", "track_0.mp3", 100)
+        write("li_pod-ep-ep_42", "cover.jpg", 30)
+        write("li_pod-ep-ep_42", "track_0.mp3", 100)
+        write("li_pod-ep-ep_43", "track_0.mp3", 100)
+        val podcastBook = dune.copy(id = "li_pod", libraryItemId = "li_pod", bytes = 130L)
+        index.upsert(podcastBook)
+        index.upsert(episode)
+        index.upsert(episode.copy(id = "li_pod-ep-ep_43", episodeId = "ep_43", bytes = 100L))
+
+        repo.delete("li_pod", "ep_42")
+
+        assertFalse(repo.itemDir("li_pod-ep-ep_42").exists())
+        assertNull(repo.entryFor("li_pod", "ep_42"))
+        // The book's own cover — the file an entry-shared cover would have taken
+        // — and the sibling episode are untouched.
+        assertTrue(File(root, "li_pod/cover.jpg").isFile)
+        assertTrue(File(root, "li_pod-ep-ep_43/track_0.mp3").isFile)
+        assertEquals(podcastBook, repo.entryFor("li_pod"))
+        assertEquals(230L, repo.totalBytes())
+    }
+
+    @Test
+    fun deletingTheItemDeletesTheBookAndLeavesItsEpisodesAlone() = runBlocking {
+        // delete(itemId, null) is the frozen call: evicting a podcast's episodes
+        // is a per-episode act, so nothing here may cascade.
+        write("li_pod", "track_0.mp3", 100)
+        write("li_pod-ep-ep_42", "track_0.mp3", 100)
+        index.upsert(dune.copy(id = "li_pod", libraryItemId = "li_pod", bytes = 100L))
+        index.upsert(episode)
+
+        repo.delete("li_pod")
+
+        assertFalse(repo.itemDir("li_pod").exists())
+        assertTrue(File(root, "li_pod-ep-ep_42/track_0.mp3").isFile)
+        assertEquals(episode, repo.entryFor("li_pod", "ep_42"))
+    }
+
+    @Test
+    fun cancellingAnEpisodeDropsOnlyItsOwnPartials() = runBlocking {
+        val bookPartial = write("li_pod", "track_0.mp3.part", 40)
+        val episodeWhole = write("li_pod-ep-ep_42", "track_0.mp3", 100)
+        val episodePartial = write("li_pod-ep-ep_42", "track_1.mp3.part", 40)
+
+        repo.cancel("li_pod", "ep_42")
+
+        assertTrue(episodeWhole.isFile)
+        assertFalse(episodePartial.exists())
+        assertTrue(bookPartial.isFile)
+    }
+
+    @Test
+    fun anEpisodeOfAnUnsafeItemIdIsRefusedLikeAnUnsafeBook() = runBlocking {
+        val outside = File(tempFolder.root, "keep-me.txt")
+        outside.writeText("not a download")
+        root.mkdirs()
+
+        repo.delete("..", "ep_42")
+        repo.enqueue("..", "ep_42")
+        repo.cancel("..", "ep_42")
+
+        assertTrue(outside.isFile)
+        assertTrue(root.isDirectory)
     }
 
     // ---- delete ------------------------------------------------------------
