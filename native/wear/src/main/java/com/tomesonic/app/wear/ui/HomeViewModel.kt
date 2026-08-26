@@ -101,11 +101,17 @@ class HomeViewModel : ViewModel() {
         // and a read-modify-write here could lose either its rows or this mark.
         _state.update { it.copy(requestedDownloads = it.requestedDownloads + key) }
         viewModelScope.launch {
-            try {
+            // enqueue reports rather than throws (a quiet refusal — unsafe id,
+            // WorkManager unavailable — is deliberate); the catch covers only
+            // what can still throw around it (an uninitialised Graph).
+            val queued = try {
                 Graph.downloadRepository.enqueue(itemId, episodeId?.takeIf { it.isNotBlank() })
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
+                false
+            }
+            if (!queued) {
                 // Un-mark, so the row honestly re-offers the download.
                 _state.update { it.copy(requestedDownloads = it.requestedDownloads - key) }
             }
