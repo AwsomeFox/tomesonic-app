@@ -243,8 +243,10 @@ class SessionManager(
         // The full path below would open a SECOND server session for the same
         // book, hand off the healthy one mid-flight and replace a queue that was
         // fine — so the same target short-circuits to "surface what's playing":
-        // resume if paused, change nothing else. A STOPPED player never matches,
-        // because stop() clears PlaybackState first.
+        // resume if paused, change nothing else. The stillLoaded check below is
+        // what makes this safe against a stopped player: stop() clears the
+        // queue (PlaybackState only after), and an empty queue falls through to
+        // the full play path rather than "resuming" nothing.
         if (isSameTarget(PlaybackState.active.value, itemId, episodeId)) {
             val stillLoaded = withContext(main) {
                 val loaded = player.mediaItemCount > 0

@@ -273,6 +273,13 @@ private fun HomeDownloadButton(
             .clip(CircleShape)
             .clickable(
                 role = Role.Button,
+                // An icon-only control is invisible to a screen reader without
+                // this; the label names the VERB the tap performs in each state.
+                onClickLabel = when (state) {
+                    HomeDownloadState.None -> "Download"
+                    HomeDownloadState.Requested -> "Open item, download in progress"
+                    HomeDownloadState.Downloaded -> "Open downloaded item"
+                },
                 onClick = if (state == HomeDownloadState.None) onDownload else onOpenItem
             ),
         contentAlignment = Alignment.Center
