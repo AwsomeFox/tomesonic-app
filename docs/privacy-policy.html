@@ -80,120 +80,142 @@
 <body>
     <div class="header">
         <h1 class="app-name">TomeSonic</h1>
-        <p class="tagline">Your AudiobookShelf Companion</p>
+        <p class="tagline">Your Audiobookshelf Companion</p>
     </div>
 
     <div class="effective-date">
-        <strong>Effective Date:</strong> September 23, 2025<br>
-        <strong>Last Updated:</strong> September 23, 2025
+        <strong>Effective Date:</strong> July 17, 2026<br>
+        <strong>Last Updated:</strong> July 17, 2026
     </div>
 
     <div class="highlight-box">
-        <h3>🔒 Privacy First</h3>
-        <p><strong>The Simple Truth:</strong> TomeSonic doesn't collect, store, or share any of your personal information. Your data stays on your device and your AudiobookShelf server—where it belongs.</p>
+        <h3>🔒 The short version</h3>
+        <p>TomeSonic is an open-source client for <strong>Audiobookshelf</strong>, a
+        self-hosted audiobook and podcast server. <strong>We — the app's
+        developer — run no servers and receive none of your data.</strong> Your
+        account, library, and listening activity go only to the Audiobookshelf
+        server <em>you</em> connect to. There are <strong>no ads, no advertising
+        IDs, and no analytics or tracking SDKs</strong>. A few optional or
+        feature-specific third-party services are described honestly below.</p>
     </div>
 
-    <h2>What We Don't Collect</h2>
+    <h2>1. Data you send to your Audiobookshelf server</h2>
+    <p>When you sign in, the app sends the following <strong>to the server address
+    you enter</strong> (and to no one else):</p>
     <div class="no-collect-list">
-        <p>TomeSonic does <strong>NOT</strong> collect any of the following:</p>
         <ul>
-            <li>Personal information (name, email, phone, etc.)</li>
-            <li>Device identifiers or advertising IDs</li>
-            <li>Location data or GPS coordinates</li>
-            <li>Usage analytics or behavior tracking</li>
-            <li>Audio files or audiobook content</li>
-            <li>Reading progress or listening habits</li>
-            <li>Search queries or browsing history</li>
-            <li>Network information or IP addresses</li>
-            <li><strong>Any other personal or technical data</strong></li>
+            <li><strong>Account credentials</strong> — your username and password, or an OpenID/SSO login, and the access/refresh tokens used with each request.</li>
+            <li><strong>Listening activity</strong> — playback position, progress, finished state, bookmarks, and playback sessions.</li>
+            <li><strong>Uploads (only if you use them)</strong> — audio files you upload, and custom cover images you pick from your photo library.</li>
+            <li><strong>Administration (only if you are a server admin)</strong> — user-management and session actions you initiate.</li>
         </ul>
     </div>
+    <p>This data is controlled by the operator of that Audiobookshelf server under
+    its own policies. If the server is reachable only over plain <code>http://</code>
+    (for example a home LAN), this data — including credentials — travels
+    <strong>unencrypted</strong>; the app warns you on the sign-in screen when a
+    connection is not encrypted and uses HTTPS whenever your server offers it.</p>
 
-    <h2>How TomeSonic Works</h2>
-    <p>TomeSonic is a privacy-focused client app that:</p>
-    <ul>
-        <li><strong>Connects directly</strong> to your self-hosted AudiobookShelf server</li>
-        <li><strong>Stores data locally</strong> on your device only</li>
-        <li><strong>Never transmits</strong> data to our servers (we don't have any!)</li>
-        <li><strong>Synchronizes</strong> only between your device and your server</li>
-    </ul>
-
-    <h2>App Permissions</h2>
+    <h2>2. Third-party services the app contacts</h2>
     <div class="permission-item">
-        <div class="permission-title">📁 Storage Access</div>
-        <div><strong>Why:</strong> Download audiobooks for offline listening</div>
-        <div><strong>What:</strong> Only audiobook files you choose to download</div>
+        <div class="permission-title">📚 Audible &amp; Audnexus — book metadata</div>
+        <div>For discovery features (finding other books by an author or in a
+        series, and fetching descriptions), the app queries the public Audible
+        catalog (<code>api.audible.com</code>) and Audnexus (<code>api.audnex.us</code>).
+        These requests include book/author/series names and identifiers (ASINs)
+        derived from your library. <strong>No account credentials are sent.</strong></div>
     </div>
-
     <div class="permission-item">
-        <div class="permission-title">🌐 Network Access</div>
-        <div><strong>Why:</strong> Connect to your AudiobookShelf server</div>
-        <div><strong>What:</strong> Communication with your server only</div>
+        <div class="permission-title">📡 Google Cast — only when you cast</div>
+        <div>If you cast to a Chromecast/Google Cast device, media-stream and
+        cover-art URLs and playback metadata are shared with the cast device and
+        Google's cast framework, as required to play on that device.</div>
     </div>
-
     <div class="permission-item">
-        <div class="permission-title">🎵 Media Playback</div>
-        <div><strong>Why:</strong> Play audiobooks and control playback</div>
-        <div><strong>What:</strong> Audio playback functionality only</div>
+        <div class="permission-title">🐞 Crash reporting (Sentry) — off by default</div>
+        <div>Crash reporting is disabled in the published build. It is only active
+        if a build is compiled with a crash-reporting key configured; when off, no
+        crash or diagnostic data is sent anywhere.</div>
     </div>
-
     <div class="permission-item">
-        <div class="permission-title">🔄 Background Service</div>
-        <div><strong>Why:</strong> Continue playback when app is minimized</div>
-        <div><strong>What:</strong> Maintains audio session only</div>
+        <div class="permission-title">🌐 Connectivity check</div>
+        <div>To detect whether you are online, the app's networking library may
+        periodically request a Google connectivity endpoint
+        (<code>clients3.google.com/generate_204</code>). No personal data is sent.</div>
+    </div>
+    <div class="permission-item">
+        <div class="permission-title">🔎 ReadMeABook (RMAB) — optional, opt-in</div>
+        <div>If you choose to connect an optional RMAB server, the app sends the
+        login token/URL you provide, your search queries, and book-request details
+        to that server. Its optional AI-recommendation feature additionally sends
+        your library and any custom prompt text you enter. This is entirely
+        opt-in.</div>
+    </div>
+    <p>Each third party operates under its own privacy policy. The app performs
+    <strong>no over-the-air telemetry or updates to the developer</strong>.</p>
+
+    <h2>3. Data stored on your device</h2>
+    <div class="no-collect-list">
+        <ul>
+            <li><strong>Encrypted at rest (normally OS keystore–backed):</strong> your server address, username, and access/refresh tokens, and any RMAB configuration. If the device keystore is unavailable, the app falls back to unencrypted app-private storage so it still launches.</li>
+            <li><strong>Unencrypted app storage:</strong> app settings, UI state, and a cache of your listening progress.</li>
+            <li><strong>App files:</strong> audiobooks you download and cached cover art, in the app's private storage.</li>
+        </ul>
+    </div>
+    <p>When you log out, your credentials and session are cleared and your
+    downloads stop being shown. <strong>Downloaded audiobooks and cached cover art
+    remain in the app's private storage</strong> until you remove them in the app
+    or uninstall it. Diagnostic logs are stored locally with secrets
+    (tokens/credentials) redacted, and are not transmitted unless crash reporting
+    is enabled.</p>
+
+    <h2>4. App permissions</h2>
+    <div class="permission-item">
+        <div class="permission-title">🌐 Network access</div>
+        <div>Connect to your Audiobookshelf server and the metadata services above.</div>
+    </div>
+    <div class="permission-item">
+        <div class="permission-title">🎵 Media playback &amp; background service</div>
+        <div>Play audiobooks and keep playing when the app is in the background, with media-notification controls.</div>
+    </div>
+    <div class="permission-item">
+        <div class="permission-title">🔔 Notifications</div>
+        <div>Show playback and download controls/progress.</div>
+    </div>
+    <div class="permission-item">
+        <div class="permission-title">🖼️ Photos (only when you choose one)</div>
+        <div>Select an image to upload as a custom book cover.</div>
+    </div>
+    <div class="permission-item">
+        <div class="permission-title">📁 Storage (older Android)</div>
+        <div>Store audiobooks you download for offline listening.</div>
     </div>
 
-    <h2>Third-Party Services</h2>
-    <p>TomeSonic may interact with:</p>
-    <ul>
-        <li><strong>Google Play Services:</strong> For app distribution only</li>
-        <li><strong>Android System Services:</strong> For media controls, Android Auto, and ChromeCast</li>
-        <li><strong>Your AudiobookShelf Server:</strong> Your server, your data, your control</li>
-    </ul>
-    <p>These services have their own privacy policies. TomeSonic doesn't share additional data with them.</p>
+    <h2>5. Account &amp; data deletion</h2>
+    <p>Your account and all of your content and listening data live on the
+    Audiobookshelf server you connect to — <strong>not</strong> in the app or with
+    the app's developer. To delete on-device data, log out or uninstall the app.
+    To delete your account and server-side data, contact the operator/administrator
+    of your Audiobookshelf server (server administrators can delete user accounts
+    on the server).</p>
 
-    <h2>Children's Privacy</h2>
-    <p>Since we don't collect any information from anyone, TomeSonic is safe for users of all ages, including children under 13.</p>
+    <h2>6. Children</h2>
+    <p>TomeSonic is not directed to children and does not knowingly collect data
+    from children.</p>
 
-    <h2>Data Security</h2>
-    <p>The best security is not collecting data in the first place. Your information stays:</p>
-    <ul>
-        <li>On your device (protected by Android security)</li>
-        <li>On your AudiobookShelf server (under your control)</li>
-        <li>Nowhere else</li>
-    </ul>
-
-    <h2>Your Rights</h2>
-    <p>Since we don't collect your data:</p>
-    <ul>
-        <li>No personal data to access, modify, or delete</li>
-        <li>No data transfers to worry about</li>
-        <li>Complete control through your own server</li>
-        <li>No marketing communications to opt out of</li>
-    </ul>
-
-    <h2>International Compliance</h2>
-    <p><strong>GDPR (EU):</strong> Not applicable - we don't process personal data<br>
-    <strong>CCPA (California):</strong> Not applicable - we don't collect personal information<br>
-    <strong>Global:</strong> Privacy-first design works everywhere</p>
-
-    <h2>Changes to This Policy</h2>
-    <p>We may update this policy occasionally. Significant changes will be communicated through app updates or our GitHub repository.</p>
-
-    <div class="highlight-box">
-        <h3>📝 Summary</h3>
-        <p>TomeSonic is built on a simple principle: <strong>your data is yours</strong>. We don't want it, don't need it, and don't collect it. The app simply helps you access and enjoy audiobooks from your own AudiobookShelf server.</p>
-        <p><em>Your privacy isn't a feature—it's our foundation.</em></p>
-    </div>
+    <h2>7. Changes to this policy</h2>
+    <p>We may update this policy occasionally; the effective date above reflects
+    the latest version. Significant changes will be communicated through app
+    updates or the GitHub repository.</p>
 
     <div class="contact-info">
         <h3>Questions?</h3>
         <p>Contact us on GitHub:<br>
-        <a href="https://github.com/AwsomeFox/audiobookshelf-app" target="_blank">github.com/AwsomeFox/audiobookshelf-app</a></p>
+        <a href="https://github.com/AwsomeFox/tomesonic-app" target="_blank">github.com/AwsomeFox/tomesonic-app</a></p>
     </div>
 
     <div class="effective-date">
-        <em>This Privacy Policy is effective as of September 23, 2025</em>
+        <em>This Privacy Policy is effective as of July 17, 2026.</em>
     </div>
 </body>
 </html>
