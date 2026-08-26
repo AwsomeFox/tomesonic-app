@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class HomeUiState(
@@ -62,21 +63,27 @@ class HomeViewModel : ViewModel() {
             val resume = HomeSections.resume(last, downloads, inProgress)
                 ?: expandedResume(last, offline)
 
-            _state.value = HomeUiState(
-                loading = false,
-                rows = HomeSections.build(
-                    resume = resume,
-                    inProgress = inProgress,
-                    libraries = libraries,
-                    downloadCount = downloads.size,
-                    offline = offline
-                ),
-                downloads = downloads,
-                // Kept across refreshes: a queued download is still no entry
-                // (charger + Wi-Fi can be hours away), and downloadState already
-                // lets a real entry outrank the marker.
-                requestedDownloads = _state.value.requestedDownloads
-            )
+            // update {}, not a value assignment: a download tap landing while
+            // the awaits above were suspended must survive this write, and the
+            // markers it carries live in the SAME state object. The rows are
+            // this coroutine's; requestedDownloads is whatever is CURRENT.
+            _state.update { current ->
+                HomeUiState(
+                    loading = false,
+                    rows = HomeSections.build(
+                        resume = resume,
+                        inProgress = inProgress,
+                        libraries = libraries,
+                        downloadCount = downloads.size,
+                        offline = offline
+                    ),
+                    downloads = downloads,
+                    // Kept across refreshes: a queued download is still no entry
+                    // (charger + Wi-Fi can be hours away), and downloadState
+                    // already lets a real entry outrank the marker.
+                    requestedDownloads = current.requestedDownloads
+                )
+            }
         }
     }
 
@@ -87,7 +94,9 @@ class HomeViewModel : ViewModel() {
      */
     fun download(itemId: String, episodeId: String?) {
         val key = HomeSections.downloadKey(itemId, episodeId)
-        _state.value = _state.value.copy(requestedDownloads = _state.value.requestedDownloads + key)
+        // Atomic in both directions: refresh() writes this state concurrently,
+        // and a read-modify-write here could lose either its rows or this mark.
+        _state.update { it.copy(requestedDownloads = it.requestedDownloads + key) }
         viewModelScope.launch {
             try {
                 Graph.downloadRepository.enqueue(itemId, episodeId?.takeIf { it.isNotBlank() })
@@ -95,7 +104,7 @@ class HomeViewModel : ViewModel() {
                 throw e
             } catch (t: Throwable) {
                 // Un-mark, so the row honestly re-offers the download.
-                _state.value = _state.value.copy(requestedDownloads = _state.value.requestedDownloads - key)
+                _state.update { it.copy(requestedDownloads = it.requestedDownloads - key) }
             }
         }
     }

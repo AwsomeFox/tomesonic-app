@@ -234,27 +234,39 @@ class SessionManager(
 
     suspend fun play(itemId: String, episodeId: String? = null): PlayResult {
         if (itemId.isBlank()) return PlayResult.NoTracks
+        // UNLOCKED fast path first: the common re-tap must not queue behind a
+        // switch that is mid-resolve (the mutex is held across a network round
+        // trip — a deliberate trade: a stop tapped during a slow resolve waits
+        // a few seconds and then wins, which beats the interleaving this mutex
+        // exists to prevent). Racy reads are fine here — the locked path
+        // re-checks before doing anything destructive.
+        if (resumeIfSameTarget(itemId, episodeId)) return PlayResult.Ok
         return commandMutex.withLock { playLocked(itemId, episodeId) }
     }
 
-    private suspend fun playLocked(itemId: String, episodeId: String?): PlayResult {
-        // Re-tapping what is ALREADY playing must not tear the session down
-        // (user-reported on-device: one tap on the playing book broke playback).
-        // The full path below would open a SECOND server session for the same
-        // book, hand off the healthy one mid-flight and replace a queue that was
-        // fine — so the same target short-circuits to "surface what's playing":
-        // resume if paused, change nothing else. The stillLoaded check below is
-        // what makes this safe against a stopped player: stop() clears the
-        // queue (PlaybackState only after), and an empty queue falls through to
-        // the full play path rather than "resuming" nothing.
-        if (isSameTarget(PlaybackState.active.value, itemId, episodeId)) {
-            val stillLoaded = withContext(main) {
-                val loaded = player.mediaItemCount > 0
-                if (loaded && !player.playWhenReady) player.play()
-                loaded
-            }
-            if (stillLoaded) return PlayResult.Ok
+    /**
+     * The no-teardown short-circuit (user-reported on-device: one tap on the
+     * playing book broke playback — the full path opens a SECOND server session
+     * for the same book, hands off the healthy one mid-flight and replaces a
+     * queue that was fine). Same target = surface what's playing: resume if
+     * paused, change nothing else. The mediaItemCount check is what makes this
+     * safe against a stopped player: stop() clears the queue (PlaybackState
+     * only after), and an empty queue answers false so the caller runs the
+     * full play path rather than "resuming" nothing.
+     */
+    private suspend fun resumeIfSameTarget(itemId: String, episodeId: String?): Boolean {
+        if (!isSameTarget(PlaybackState.active.value, itemId, episodeId)) return false
+        return withContext(main) {
+            val loaded = player.mediaItemCount > 0
+            if (loaded && !player.playWhenReady) player.play()
+            loaded
         }
+    }
+
+    private suspend fun playLocked(itemId: String, episodeId: String?): PlayResult {
+        // Re-checked under the lock: the play that was in flight while this one
+        // waited may have just made its target the active one.
+        if (resumeIfSameTarget(itemId, episodeId)) return PlayResult.Ok
 
         // Resolve BEFORE touching the outgoing session: a `/play` round trip can
         // take seconds, and closing the current book only to fail on the new one

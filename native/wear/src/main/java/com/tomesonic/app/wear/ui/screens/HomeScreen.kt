@@ -18,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -267,18 +269,26 @@ private fun HomeDownloadButton(
     onDownload: () -> Unit,
     onOpenItem: () -> Unit
 ) {
+    // An icon-only control is invisible to a screen reader without BOTH of
+    // these: contentDescription names the NODE (what this button is, per
+    // state), onClickLabel names the VERB its tap performs.
     Box(
         modifier = Modifier
             .size(34.dp)
             .clip(CircleShape)
+            .semantics {
+                contentDescription = when (state) {
+                    HomeDownloadState.None -> "Download"
+                    HomeDownloadState.Requested -> "Download in progress"
+                    HomeDownloadState.Downloaded -> "Downloaded"
+                }
+            }
             .clickable(
                 role = Role.Button,
-                // An icon-only control is invisible to a screen reader without
-                // this; the label names the VERB the tap performs in each state.
                 onClickLabel = when (state) {
                     HomeDownloadState.None -> "Download"
-                    HomeDownloadState.Requested -> "Open item, download in progress"
-                    HomeDownloadState.Downloaded -> "Open downloaded item"
+                    HomeDownloadState.Requested -> "Open item"
+                    HomeDownloadState.Downloaded -> "Open item"
                 },
                 onClick = if (state == HomeDownloadState.None) onDownload else onOpenItem
             ),
