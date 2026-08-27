@@ -5,7 +5,12 @@
 //  2. the hand-summed content-block height drifted from the cascade it was
 //     supposed to mirror, mis-centering the tablet block.
 // These tests pin the invariants so CI catches the next drift.
-import { computePlayerLayout, PlayerLayoutInput } from "../../utils/playerLayout";
+import {
+  computePlayerLayout,
+  MIN_ADAPTIVE_COVER,
+  PEEK_HANDLE_H,
+  PlayerLayoutInput,
+} from "../../utils/playerLayout";
 
 const phone = (over: Partial<PlayerLayoutInput> = {}): PlayerLayoutInput => ({
   screenWidth: 412,
@@ -157,21 +162,30 @@ describe("computePlayerLayout", () => {
       expect(l.contentOverflows).toBe(false);
     });
 
-    it("flips exactly at the fit boundary as the viewport shrinks", () => {
-      // 412-wide phone, insets 24/0: the cover caps at 320 for both heights,
-      // so the block bottom (+8 slack) sits at a fixed 790dp — one dp of
-      // screen height across that line must flip the flag. (Was 816 before
-      // the numeric row folded into the bars as inline labels.)
+    it("flips exactly at the adaptive-cover floor as the viewport shrinks", () => {
+      // 412-wide phone, insets 24/0. Above the floor the cover shrinks to
+      // absorb the missing height (fittedCover >= MIN_ADAPTIVE_COVER), so the
+      // block always fits; one dp below, the cover snaps back to its natural
+      // size and scrolling takes over — the flag must flip on that dp.
       const at = (screenHeight: number) =>
         computePlayerLayout({ screenWidth: 412, screenHeight, insetTop: 24, insetBottom: 0, showBookProgress: true });
-      expect(at(790).contentOverflows).toBe(false); // exactly fits (strict >)
-      expect(at(789).contentOverflows).toBe(true); // one dp short
+      expect(at(744).COVER_SIZE_EXP).toBe(MIN_ADAPTIVE_COVER); // fitted, at the floor
+      expect(at(744).contentOverflows).toBe(false);
+      expect(at(743).COVER_SIZE_EXP).toBeGreaterThan(MIN_ADAPTIVE_COVER); // natural again
+      expect(at(743).contentOverflows).toBe(true);
     });
 
-    it("bottom-inset flip: the same phone overflows with 3-button nav (48) but not gesture nav (0)", () => {
+    it("bottom-inset flip: 3-button nav (48) shrinks the cover instead of overflowing", () => {
+      // Pre-adaptive behavior: the 48dp inset pushed the pill under the peek
+      // and flipped scrolling on. Now the cover absorbs exactly the inset
+      // difference and both configurations fit without scrolling.
       const dims = { screenWidth: 412, screenHeight: 820, insetTop: 24, showBookProgress: true };
-      expect(computePlayerLayout({ ...dims, insetBottom: 0 }).contentOverflows).toBe(false);
-      expect(computePlayerLayout({ ...dims, insetBottom: 48 }).contentOverflows).toBe(true);
+      const gesture = computePlayerLayout({ ...dims, insetBottom: 0 });
+      const buttons = computePlayerLayout({ ...dims, insetBottom: 48 });
+      expect(gesture.contentOverflows).toBe(false);
+      expect(buttons.contentOverflows).toBe(false);
+      expect(gesture.COVER_SIZE_EXP - buttons.COVER_SIZE_EXP).toBe(48);
+      expect(buttons.COVER_SIZE_EXP).toBeGreaterThanOrEqual(MIN_ADAPTIVE_COVER);
     });
 
     it("hiding the book bar frees exactly 32dp of cascade height", () => {
@@ -182,13 +196,65 @@ describe("computePlayerLayout", () => {
     });
   });
 
+  describe("chapters-sheet peek budgeting (the foldable fix)", () => {
+    // The chapters/queue sheet permanently peeks PEEK_HANDLE_H above the
+    // bottom inset while the player is expanded. The original bug: every fit
+    // bound stopped at the safe-area bottom, so near-square screens (foldables
+    // unfolded) parked the transport/pill UNDER the peeking sheet with
+    // scrolling still off — invisible and unreachable.
+    it.each(devices)(
+      "%s: whenever scrolling stays off, the pill clears the peek, both modes",
+      (_name, dims) => {
+        for (const showBookProgress of [true, false]) {
+          const l = computePlayerLayout({ ...dims, showBookProgress });
+          if (!l.contentOverflows) {
+            expect(l.contentBottomY + 8).toBeLessThanOrEqual(
+              dims.screenHeight - dims.insetBottom - PEEK_HANDLE_H
+            );
+          }
+        }
+      }
+    );
+
+    it("foldable inner 673x841: the cover shrinks to fit and nothing scrolls", () => {
+      const l = computePlayerLayout({
+        screenWidth: 673,
+        screenHeight: 841,
+        insetTop: 24,
+        insetBottom: 24,
+        showBookProgress: true,
+      });
+      // The natural cover (min(400, 42% of height, 420) = 353) can't fit above
+      // the peek here; the adaptive size fills the room exactly instead.
+      const natural = Math.min(480 - 80, Math.round(841 * 0.42), 420);
+      expect(l.COVER_SIZE_EXP).toBeLessThan(natural);
+      expect(l.COVER_SIZE_EXP).toBeGreaterThanOrEqual(MIN_ADAPTIVE_COVER);
+      expect(l.COVER_SIZE_EXP).toBe(Math.floor(l.availH - (l.CONTENT_BLOCK_H - l.COVER_SIZE_EXP)));
+      expect(l.contentOverflows).toBe(false);
+    });
+
+    it("adaptive sizing never touches screens whose natural cover already fits", () => {
+      for (const dims of [phone(), tablet()]) {
+        const l = computePlayerLayout(dims);
+        const natural = Math.min(
+          Math.min(dims.screenWidth, 480) - 80,
+          Math.round(dims.screenHeight * 0.42),
+          Math.min(dims.screenWidth, dims.screenHeight) >= 600 ? 420 : 320
+        );
+        expect(l.COVER_SIZE_EXP).toBe(natural);
+      }
+    });
+  });
+
   describe("tablet vertical centering", () => {
-    it("extraTop = max(0, (availH - CONTENT_BLOCK_H) / 2) on tablets", () => {
+    it("extraTop = max(0, floor((availH - CONTENT_BLOCK_H) / 2)) on tablets", () => {
       const l = computePlayerLayout(tablet());
       expect(l.isTablet).toBe(true);
-      const expectedAvail = 1280 - (24 + 8 + 56) - 24 - 20;
+      // Below the top bar (24+8+56) and the source-label rhythm (12+20+8),
+      // above the bottom inset + the chapters sheet's peek + 8dp slack.
+      const expectedAvail = 1280 - (24 + 8 + 56) - (12 + 20 + 8) - 24 - PEEK_HANDLE_H - 8;
       expect(l.availH).toBe(expectedAvail);
-      expect(l.extraTop).toBe(Math.max(0, (expectedAvail - l.CONTENT_BLOCK_H) / 2));
+      expect(l.extraTop).toBe(Math.max(0, Math.floor((expectedAvail - l.CONTENT_BLOCK_H) / 2)));
       expect(l.extraTop).toBeGreaterThan(0);
       // The centering must feed the cascade: the source label shifts by extraTop.
       const base = computePlayerLayout(tablet());

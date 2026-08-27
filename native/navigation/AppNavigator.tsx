@@ -151,6 +151,12 @@ function TabNavigator() {
         ),
         tabBarActiveTintColor: colors.onSurface,
         tabBarInactiveTintColor: colors.onSurfaceVariant,
+        // On wide screens (>=768dp — foldables unfolded, tablets) bottom-tabs
+        // switches to a label-BESIDE-icon layout, which squeezes the 64x32
+        // indicator pill into a ~24dp-tall icon box and parks it off-center
+        // next to the label. The M3 navigation bar keeps the label under the
+        // pill at every width, so pin that layout.
+        tabBarLabelPosition: "below-icon",
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopWidth: 1,
