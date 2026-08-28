@@ -139,9 +139,12 @@ floors.
 - [x] Exploration / this plan (feasibility survey verified against the repo and
       developer.android.com)
 - [x] Wave 0 — contract at `native/automotive/ARCHITECTURE.md`; icon plugin gap fixed
-- [ ] Wave 1 — scaffold + CI
-- [ ] Wave 2 — data layer
-- [ ] Wave 3 — media service
-- [ ] Wave 4 — sign-in / settings / account
+- [x] Wave 1 — scaffold + CI (module compiles and tests in every workflow wear does)
+- [x] Wave 2 — data layer (ported from wear, one credential owner)
+- [x] Wave 3 — media service: browse tree from the patched Auto service,
+      playback/downloads/progress from wear, framework play path wired
+      (`onSetMediaItems`/`onAddMediaItems`/`onPlaybackResumption`)
+- [ ] Wave 4 — sign-in / settings / account (incl. mapping `NotConfigured` to
+      the sign-in resolution extras once the activity exists)
 - [ ] Wave 5 — Play docs + deploy
 - [ ] Wave 6 — screenshots + validation

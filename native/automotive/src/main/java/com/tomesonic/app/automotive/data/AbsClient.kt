@@ -98,6 +98,29 @@ class AbsClient(
         .build()
 
     /**
+     * The BROWSE view of [client]: same interceptor, same connection pool, same
+     * dispatcher — only the socket ceilings differ (5 s connect / 10 s read,
+     * ARCHITECTURE.md §7, the patched Auto service's budget verbatim).
+     *
+     * Two ceilings, not one, because the two paths fail differently. A browse
+     * fetch sits behind BrowseTree's stale-on-failure cache: giving up at 10 s
+     * costs a slightly older folder, while waiting 30 s costs the car's
+     * ten-second content budget (DR-3) and shows a spinner instead of a
+     * library. A media stream, a download or a progress sync has no such
+     * fallback — cutting those off at 10 s on a slow self-hosted server would
+     * turn "slow" into "broken", which is why [client] keeps the donor's
+     * 15 s/30 s and Wave 3 tightens only what it also made recoverable.
+     *
+     * `newBuilder()` and not a fresh Builder: a second pool would mean a second
+     * set of connections to the same server (and a second set of TLS
+     * handshakes) for every folder the user opens.
+     */
+    private val browseClient: OkHttpClient = client.newBuilder()
+        .connectTimeout(BROWSE_CONNECT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(BROWSE_READ_SECONDS, TimeUnit.SECONDS)
+        .build()
+
+    /**
      * A SECOND client, with no interceptor and therefore no token and no 401
      * handling of its own. Both requests that ride it are requests the main
      * client structurally cannot make:
@@ -347,6 +370,15 @@ class AbsClient(
 
     suspend fun get(path: String): String? = execute("GET", path, null)
 
+    /**
+     * A GET on the BROWSE budget ([browseClient]) — same auth, same 401
+     * handling, tighter sockets. `internal` because the only legitimate callers
+     * are [AbsApi]'s browse-surface methods, which is where the decision
+     * "this fetch is behind the browse cache" is actually made.
+     */
+    internal suspend fun getBrowse(path: String): String? =
+        execute("GET", path, null, browseClient)
+
     suspend fun postJson(path: String, body: JSONObject): String? =
         execute("POST", path, body.toString().toRequestBody(JSON_MEDIA_TYPE))
 
@@ -357,7 +389,17 @@ class AbsClient(
     suspend fun patchJson(path: String, body: JSONArray): String? =
         execute("PATCH", path, body.toString().toRequestBody(JSON_MEDIA_TYPE))
 
-    private suspend fun execute(method: String, path: String, body: RequestBody?): String? {
+    /**
+     * [http] defaults to [client], so every pre-Wave-3 caller keeps the exact
+     * request it always made; the browse surface passes [browseClient] to swap
+     * the socket ceilings and nothing else.
+     */
+    private suspend fun execute(
+        method: String,
+        path: String,
+        body: RequestBody?,
+        http: OkHttpClient = client
+    ): String? {
         // Read through the flow rather than the snapshot: a call fired during the
         // first frames of a cold start would otherwise see a null snapshot the
         // collector hasn't filled yet and report "not configured".
@@ -378,7 +420,7 @@ class AbsClient(
                 val server = creds.server.toHttpUrlOrNull()
                 val authorize = server != null && sameOrigin(target, server)
 
-                var response = client
+                var response = http
                     .newCall(request(target, method, body, if (authorize) creds.token else null))
                     .execute()
                 // The interceptor answers a 401 for every request on this client.
@@ -394,7 +436,7 @@ class AbsClient(
                     if (refresh(creds)) {
                         response.close()
                         val token = credsRepository.creds.first()?.token ?: creds.token
-                        response = client.newCall(request(target, method, body, token)).execute()
+                        response = http.newCall(request(target, method, body, token)).execute()
                     }
                 }
                 response.use { r ->
@@ -439,6 +481,14 @@ class AbsClient(
         /** Per-phase ceilings under them, so neither phase can hang on its own. */
         private const val BARE_CONNECT_SECONDS = 15L
         private const val BARE_READ_SECONDS = 20L
+
+        /**
+         * The browse budget (ARCHITECTURE.md §7) — the patched Auto service's
+         * `connectTimeout = 5000; readTimeout = 10000`, unchanged. Internal so a
+         * test can assert the two ceilings are still the ones the contract names.
+         */
+        internal const val BROWSE_CONNECT_SECONDS = 5L
+        internal const val BROWSE_READ_SECONDS = 10L
 
         /**
          * Origin equality: scheme + host (case-insensitive) + effective port.

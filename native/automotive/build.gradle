@@ -154,4 +154,13 @@ dependencies {
     // second line — and the data tests deliberately add no coroutine-test or
     // MockWebServer dependency, exactly as :wear's don't.
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Wave 3B downloads. The SAME coordinate and version :wear pins — the whole
+    // downloads package is that module's, and the transfer is a CoroutineWorker
+    // whose constraints, retry backoff and reboot persistence are the reason
+    // WorkManager is here rather than a service of our own. `implementation`
+    // puts WorkInfo.State on the unit-test compile classpath too, which is all
+    // DownloadRepositoryTest's status-fold table needs — `work-testing` stays
+    // deliberately absent, exactly as on :wear.
+    implementation 'androidx.work:work-runtime-ktx:2.10.1'
 }

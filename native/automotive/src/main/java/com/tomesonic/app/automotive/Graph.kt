@@ -4,6 +4,7 @@ import android.content.Context
 import com.tomesonic.app.automotive.data.AbsApi
 import com.tomesonic.app.automotive.data.AbsClient
 import com.tomesonic.app.automotive.data.CredsRepository
+import com.tomesonic.app.automotive.downloads.DownloadRepository
 
 /**
  * The whole dependency graph: lazy singletons behind an application Context.
@@ -13,9 +14,9 @@ import com.tomesonic.app.automotive.data.CredsRepository
  * Deliberately dumb: construction only. Anything that needs a lifecycle
  * (collectors, connections) owns its own scope.
  *
- * Wave 2 declares only what Wave 2 lands. The donor's download repository and
- * everything downstream of it arrive with Wave 3, next to the classes that need
- * them.
+ * Declares only what has landed. Waves append; nothing here is reordered,
+ * because a lazy singleton's construction order is the one thing a reader of
+ * this file is entitled to take at face value.
  */
 object Graph {
 
@@ -64,6 +65,20 @@ object Graph {
     }
 
     val absApi: AbsApi by lazy { AbsApi(absClient, credsRepository, versionName) }
+
+    /**
+     * On-car downloads: the index file plus `filesDir/downloads`. Lazy like
+     * everything else here — DownloadWorker resolves it in whatever process
+     * WorkManager starts it in, and nothing reads the index until asked.
+     *
+     * SessionManager and ProgressSyncer are deliberately NOT here, mirroring the
+     * donor's Graph: both take the media3 Player as a constructor argument, so
+     * they can only be built where the player is — AbsLibraryService.onCreate,
+     * which owns the player's lifetime. What they DO resolve from this graph are
+     * their own defaults (absApi, absClient, credsRepository), so the service
+     * constructs them with three arguments and nothing else.
+     */
+    val downloadRepository: DownloadRepository by lazy { DownloadRepository.create(context) }
 
     private const val FALLBACK_VERSION = "0"
 }

@@ -54,10 +54,12 @@ sealed interface LoginResult {
  * every failure with silence would be unusable. It is also the one call that
  * runs WITHOUT credentials, against a server the user is still typing.
  *
- * The browse-tree-only endpoints §4.4 adds on top of the wear surface
- * (`/personalized`, `/authors`, `/series`, `/collections`, cross-library
- * `/search`) belong to Wave 3's BrowseTree and are not ported here — this file
- * is the wear donor, unchanged in behavior.
+ * Everything above the "Browse-tree surface" divider is the wear donor,
+ * unchanged in behavior. Below it are the endpoints §4.4 adds on top of that
+ * surface (`/personalized`, `/authors`, `/series`, `/collections`, the
+ * cross-library search) — added by Wave 3 for BrowseTree, on the browse socket
+ * budget and returning org.json rows rather than models, for the reasons the
+ * divider's comment gives.
  */
 class AbsApi(
     private val client: AbsClient,
@@ -218,6 +220,158 @@ class AbsApi(
         return "$base&token=${enc(token)}"
     }
 
+    // ================= Browse-tree surface (ARCHITECTURE.md §4.4) =========
+    //
+    // Two things are deliberately different below this line.
+    //
+    // 1. Every fetch rides [AbsClient.getBrowse] — the 5 s connect / 10 s read
+    //    budget of §7. These calls sit behind BrowseTree's stale-on-failure
+    //    cache, which is the thing that makes a tight ceiling safe: a fetch
+    //    that gives up serves a slightly older folder instead of spending the
+    //    car's ten-second content budget (DR-3) on a spinner.
+    //
+    // 2. They return org.json rows, not the typed models above, and that is not
+    //    laziness. The browse tree reads a WIDER set of fields than any model
+    //    here carries — a library's server-assigned `icon`, an author's
+    //    `numBooks`, a series entry's `sequence` and its first book's author, a
+    //    progress row's `isFinished` — and every one of those reads is a
+    //    byte-level port of the shipped Android Auto tree. Typing them would
+    //    mean inventing six models whose only consumer is one file, and would
+    //    put a second parse (and a second chance to diverge) between the donor
+    //    and the port. The endpoint, the query string and the envelope key stay
+    //    here, with the module's other HTTP; the field reads stay in BrowseTree,
+    //    with the donor they came from.
+    //
+    // A null return keeps its meaning from the typed surface: the REQUEST
+    // failed. An empty array means the server answered with nothing, and the
+    // browse cache spends that difference (a failure serves stale, an empty
+    // answer replaces).
+
+    /** `GET /api/libraries` -> the `libraries` rows, `icon` and all. */
+    suspend fun libraryRows(): JSONArray? =
+        parseObject(client.getBrowse("/api/libraries"))?.optJSONArray("libraries")
+
+    /**
+     * `GET /api/libraries/{id}/items` -> the `results` rows, always minified.
+     *
+     * One method for every item list the tree draws (Recently Added, All Books,
+     * Listen Again, an author's books, a series' books, a podcast library's
+     * shows), because they differ only in filter, sort and cap.
+     * [filterType]/[filterValue] are the ABS library-item filter pair — the
+     * VALUE is base64'd and url-encoded here (see [absB64]), so callers pass
+     * the raw entity id.
+     */
+    suspend fun itemRows(
+        libraryId: String,
+        limit: Int,
+        filterType: String? = null,
+        filterValue: String? = null,
+        sort: String? = null,
+        desc: Boolean = false
+    ): JSONArray? {
+        val path = StringBuilder("/api/libraries/${enc(libraryId)}/items?limit=$limit&minified=1")
+        if (filterType != null && filterValue != null) {
+            path.append("&filter=$filterType.${absB64(filterValue)}")
+        }
+        if (sort != null) path.append("&sort=$sort")
+        if (desc) path.append("&desc=1")
+        return results(client.getBrowse(path.toString()))
+    }
+
+    /** `GET /api/libraries/{id}/authors` -> the `authors` rows (name + numBooks). */
+    suspend fun authors(libraryId: String): JSONArray? =
+        parseObject(client.getBrowse("/api/libraries/${enc(libraryId)}/authors"))
+            ?.optJSONArray("authors")
+
+    /**
+     * `GET /api/libraries/{id}/series` -> the `results` rows.
+     *
+     * Minified, but the rows still carry `books` — which is where the series
+     * list gets the author it labels each row with, and where the
+     * continue-series resolver gets its name -> id mapping.
+     */
+    suspend fun series(libraryId: String, limit: Int, sort: String? = null): JSONArray? {
+        val path = StringBuilder("/api/libraries/${enc(libraryId)}/series?limit=$limit&minified=1")
+        if (sort != null) path.append("&sort=$sort")
+        return results(client.getBrowse(path.toString()))
+    }
+
+    /** `GET /api/libraries/{id}/collections` -> the `results` rows. */
+    suspend fun collections(libraryId: String, limit: Int = 200): JSONArray? =
+        results(client.getBrowse("/api/libraries/${enc(libraryId)}/collections?limit=$limit&minified=1"))
+
+    /** `GET /api/collections/{id}` -> its `books`. Note: NOT a `results` envelope. */
+    suspend fun collection(collectionId: String): JSONArray? =
+        parseObject(client.getBrowse("/api/collections/${enc(collectionId)}"))
+            ?.optJSONArray("books")
+
+    /**
+     * `GET /api/libraries/{id}/personalized` -> the shelves, as a BARE array
+     * (no envelope). The tree wants the one whose `id` is `continue-series`.
+     */
+    suspend fun personalized(libraryId: String, limit: Int = 25): JSONArray? =
+        parseArray(client.getBrowse("/api/libraries/${enc(libraryId)}/personalized?limit=$limit"))
+
+    /**
+     * `GET /api/me/items-in-progress` -> the `libraryItems` rows.
+     *
+     * The raw twin of [itemsInProgress]: Continue Listening needs `media` (to
+     * filter ebook-only items) and `media.metadata.seriesName` (to find the
+     * series you are mid-way through), neither of which [ItemSummary] carries.
+     */
+    suspend fun itemsInProgressRows(limit: Int = 25): JSONArray? =
+        parseObject(client.getBrowse("/api/me/items-in-progress?limit=$limit"))
+            ?.optJSONArray("libraryItems")
+
+    /**
+     * `GET /api/me` -> the `mediaProgress` rows: every position this user has,
+     * in one request. The browse tree needs progress for nearly every row it
+     * draws, and one cached fetch beats a per-item lookup on a flaky car link.
+     */
+    suspend fun mediaProgressRows(): JSONArray? =
+        parseObject(client.getBrowse("/api/me"))?.optJSONArray("mediaProgress")
+
+    /**
+     * The expanded item, on the browse budget — the podcast folder's episode
+     * list. Typed, unlike its neighbours here, because [ItemDetail] already
+     * parses exactly what that folder draws (the show's title and its
+     * episodes' id/title/publishedAt) and is already under test.
+     */
+    suspend fun podcastItem(itemId: String): ItemDetail? =
+        ItemDetail.fromJson(parseObject(client.getBrowse("/api/items/${enc(itemId)}?expanded=1")))
+
+    /**
+     * Cross-library search (§4.4) -> the matched `libraryItem` rows, in
+     * library order then server order.
+     *
+     * A fan-out over `GET /api/libraries/{id}/search`, which is what the donor
+     * does and what ABS actually serves; the contract's one-line `/search?q=`
+     * names the SURFACE, not a single endpoint. Books only, deliberately: this
+     * feeds voice search (VC-1), where "play <title>" means an audiobook.
+     *
+     * Null only when the LIBRARY LIST could not be fetched — a library whose
+     * own search fails costs that library's hits, not the whole query, exactly
+     * as the donor's `continue` does. Rows are NOT de-duplicated here: the
+     * caller drops repeats while it filters and builds, in one pass.
+     */
+    suspend fun searchAll(query: String, limit: Int = BROWSE_SEARCH_LIMIT): JSONArray? {
+        val libraries = libraryRows() ?: return null
+        val out = JSONArray()
+        val q = enc(query)
+        for (i in 0 until libraries.length()) {
+            val libId = absStr(libraries.optJSONObject(i), "id") ?: continue
+            val body = client.getBrowse("/api/libraries/${enc(libId)}/search?q=$q&limit=$limit")
+            val books = parseObject(body)?.optJSONArray("book") ?: continue
+            for (j in 0 until books.length()) {
+                books.optJSONObject(j)?.optJSONObject("libraryItem")?.let { out.put(it) }
+            }
+        }
+        return out
+    }
+
+    /** The `results` envelope every library-scoped list answers with. */
+    private fun results(raw: String?): JSONArray? = parseObject(raw)?.optJSONArray("results")
+
     private fun summaries(arr: JSONArray?): List<ItemSummary> {
         val a = arr ?: return emptyList()
         val out = ArrayList<ItemSummary>(a.length())
@@ -234,6 +388,13 @@ class AbsApi(
 
         /** One screenful of results, per the contract's `limit=12`. */
         const val SEARCH_LIMIT = 12
+
+        /**
+         * The browse/voice search cap, PER LIBRARY — the donor's `limit=20`.
+         * Higher than [SEARCH_LIMIT] on purpose: this one is merged across
+         * libraries and then paged by the car, rather than being one row.
+         */
+        const val BROWSE_SEARCH_LIMIT = 20
 
         /** Books first, then podcasts — the merge order IS the contract. */
         private val SEARCH_SECTIONS = listOf("book", "podcast")
@@ -370,6 +531,39 @@ class AbsApi(
                 null
             }
         }
+
+        /**
+         * A response that is a BARE array — `/personalized` is the only one.
+         * Same contract as [parseObject]: a body that isn't the shape asked for
+         * is indistinguishable from no data.
+         */
+        fun parseArray(raw: String?): JSONArray? {
+            val body = raw ?: return null
+            return try {
+                JSONArray(body)
+            } catch (t: Throwable) {
+                null
+            }
+        }
+
+        /**
+         * An ABS library-item filter value: base64 of the entity id, then
+         * url-encoded — what the web client sends, ported verbatim from the
+         * donor's `absB64`. NO_WRAP matters: the default inserts newlines,
+         * which url-encode into `%0A` and make the server match nothing.
+         *
+         * Internal so a test can pin the exact encoding without a live server —
+         * a filter the server can't parse silently returns the WHOLE library,
+         * which looks like a working screen full of the wrong books.
+         */
+        internal fun absB64(s: String): String =
+            URLEncoder.encode(
+                android.util.Base64.encodeToString(
+                    s.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                ),
+                "UTF-8"
+            )
 
         /**
          * One path segment. URLEncoder is form-encoding, so its "+" for a space
