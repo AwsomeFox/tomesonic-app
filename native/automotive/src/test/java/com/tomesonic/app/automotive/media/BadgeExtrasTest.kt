@@ -165,4 +165,25 @@ class BadgeExtrasTest {
         assertEquals(2L, extras.getLong(KEY_DOWNLOAD_STATUS))
         assertEquals(1, extras.getInt(KEY_PLAYBACK_STATUS))
     }
+
+    @Test
+    fun theMediaTypeFollowsThePlayIdGrammar() {
+        // The play id is the truth about what a row is: an episode segment
+        // makes it a podcast episode, everything else is a book. (The donor
+        // tagged every playable row AUDIO_BOOK; head units may group on this.)
+        val book = BrowseStyles.playableItem(
+            mediaId = "play:i1", title = "T", artist = null, subtitle = null
+        )
+        assertEquals(
+            androidx.media3.common.MediaMetadata.MEDIA_TYPE_AUDIO_BOOK,
+            book.mediaMetadata.mediaType
+        )
+        val episode = BrowseStyles.playableItem(
+            mediaId = "play:p1::ep-1", title = "T", artist = null, subtitle = null
+        )
+        assertEquals(
+            androidx.media3.common.MediaMetadata.MEDIA_TYPE_PODCAST_EPISODE,
+            episode.mediaMetadata.mediaType
+        )
+    }
 }

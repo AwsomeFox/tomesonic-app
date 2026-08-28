@@ -256,12 +256,22 @@ object BrowseStyles {
         artworkBytes: ByteArray? = null,
         downloaded: Boolean = false
     ): MediaItem {
+        // The grammar is the truth about WHAT this row is: an episode segment in
+        // the play id means a podcast episode, everything else is a book. (The
+        // donor tagged every playable row AUDIO_BOOK; media3 has had
+        // MEDIA_TYPE_PODCAST_EPISODE all along, and head units may group or
+        // badge on it.)
+        val mediaType = if (PlayMediaId.parse(mediaId).episodeOrNull() != null) {
+            MediaMetadata.MEDIA_TYPE_PODCAST_EPISODE
+        } else {
+            MediaMetadata.MEDIA_TYPE_AUDIO_BOOK
+        }
         val md = MediaMetadata.Builder()
             .setTitle(displayTitle(prog, title))
             .setArtist(artist ?: "")
             .setIsBrowsable(false)
             .setIsPlayable(true)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+            .setMediaType(mediaType)
             .setExtras(itemExtras(prog, downloaded))
         when {
             artworkUri != null -> md.setArtworkUri(artworkUri)
