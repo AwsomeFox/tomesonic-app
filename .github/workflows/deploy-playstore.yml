@@ -9,8 +9,9 @@ name: Deploy to Play Store
 #     version file (build.gradle versionName+versionCode, app.json,
 #     package.json) via native/scripts/set-version.mjs, commits that bump back
 #     to the branch you dispatched on, tags it v<version>, builds the signed
-#     AABs (phone + wear), and uploads each to its track — the wear AAB goes
-#     to the DEDICATED form-factor track ("wear:" + the chosen track name).
+#     AABs (phone + wear + automotive), and uploads each to its track — the
+#     wear and automotive AABs go to their DEDICATED form-factor tracks
+#     ("wear:" / "automotive:" + the chosen track name).
 #     versionCode defaults to current+1 — pass it explicitly
 #     the FIRST time (it must exceed the highest code ever uploaded to Play,
 #     including the old Vue app's).
@@ -185,7 +186,8 @@ jobs:
         # SENTRY_DISABLE_AUTO_UPLOAD skips source-map upload until Sentry
         # org/project/auth-token secrets are configured.
         # Unscoped, so this also builds the :wear module's AAB (Wear OS app,
-        # native/wear), signed with the same upload key from the -P props.
+        # native/wear) and the :automotive module's (Android Automotive OS app,
+        # native/automotive), signed with the same upload key from the -P props.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -196,18 +198,19 @@ jobs:
             -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.UPLOAD_KEY_ALIAS }}" \
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
 
-      - name: Verify both AABs exist
-        # Each upload step below names its bundle. If :wear ever fell
-        # out of settings.gradle (a prebuild without the config plugin), an
+      - name: Verify all AABs exist
+        # Each upload step below names its bundle. If :wear or :automotive ever
+        # fell out of settings.gradle (a prebuild without the config plugin), an
         # unscoped bundleRelease would "succeed" phone-only and the failure
         # would surface as a cryptic missing-file error inside the upload
         # action. Fail here instead, with a message that names the cause.
         run: |
           for f in \
             native/android/app/build/outputs/bundle/release/app-release.aab \
-            native/wear/build/outputs/bundle/release/wear-release.aab; do
+            native/wear/build/outputs/bundle/release/wear-release.aab \
+            native/automotive/build/outputs/bundle/release/automotive-release.aab; do
             if [ ! -f "$f" ]; then
-              echo "::error::$f missing after bundleRelease — if it's the wear one, check that settings.gradle still includes ':wear' (plugins/withWearApp.js re-injects it on prebuild)."
+              echo "::error::$f missing after bundleRelease — if it's the wear one, check that settings.gradle still includes ':wear' (plugins/withWearApp.js re-injects it on prebuild); if it's the automotive one, check that settings.gradle still carries its include ':automotive' line (plugins/withAutomotiveApp.js re-injects it on prebuild)."
               exit 1
             fi
           done
@@ -237,12 +240,12 @@ jobs:
             echo "No release notes supplied — the previous release's notes are kept."
           fi
 
-      # TWO upload steps, not one release with two bundles: form-factor
+      # THREE upload steps, not one release with three bundles: form-factor
       # artifacts live on DEDICATED tracks in the Play API ("wear:internal",
-      # "wear:production", …). Putting the wear AAB inside the main track's
-      # release uploads fine but the final edits.commit comes back with an
-      # opaque 500 "Internal error encountered" (run 32809119310: both
-      # artifacts uploaded, commit rejected). Phone goes FIRST so a missing
+      # "wear:production", "automotive:alpha", …). Putting the wear AAB inside
+      # the main track's release uploads fine but the final edits.commit comes
+      # back with an opaque 500 "Internal error encountered" (run 32809119310:
+      # both artifacts uploaded, commit rejected). Phone goes FIRST so a missing
       # wear track can never block the phone release.
       - name: Upload phone AAB to Play Store
         uses: r0adkll/upload-google-play@v1.1.3
@@ -275,6 +278,34 @@ jobs:
           # that, this step fails fast at "Validating track" and the phone
           # release above has already gone out.
           track: wear:${{ github.event.inputs.track || 'alpha' }}
+          status: completed
+          whatsNewDirectory: ${{ steps.notes.outputs.hasNotes == 'true' && 'distribution/whatsnew' || '' }}
+          changesNotSentForReview: ${{ github.event.inputs.changesNotSentForReview == 'true' }}
+
+      # LAST, deliberately: the order is phone → wear → automotive, so a
+      # missing car track can never block artifacts that are already shipping.
+      # The car review is also the strictest of the three (blocking on open
+      # testing/production, and "Blocking (all APKs)" because all three share
+      # one package) — so a FIRST Android Automotive OS submission goes out on
+      # its own automotive: dispatch, never bundled into an urgent phone
+      # release. See PLAY_STORE_AUTOMOTIVE.md § "2. Android Automotive OS
+      # review" for that ladder.
+      - name: Upload automotive AAB to Play Store (Android Automotive OS track)
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          packageName: com.tomesonic.app
+          # Same packageName, same signing key; :automotive derives its
+          # versionCode from app/build.gradle (+2_000_000) at configure time,
+          # so the one bump above covers all three artifacts.
+          releaseFiles: native/automotive/build/outputs/bundle/release/automotive-release.aab
+          # Same track NAME with the "automotive:" form-factor prefix. These
+          # tracks only exist after the one-time Android Automotive OS opt-in in
+          # Play Console (Test and release → Advanced settings → Form factors,
+          # which also wants AAOS screenshots) — before that, this step fails
+          # fast at "Validating track" and the phone and wear releases above
+          # have already gone out.
+          track: automotive:${{ github.event.inputs.track || 'alpha' }}
           status: completed
           whatsNewDirectory: ${{ steps.notes.outputs.hasNotes == 'true' && 'distribution/whatsnew' || '' }}
           changesNotSentForReview: ${{ github.event.inputs.changesNotSentForReview == 'true' }}

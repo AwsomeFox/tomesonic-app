@@ -8,7 +8,7 @@ progress syncing through the ABS server like every other client.
 This file is the plan and the why. The **implementation contract** is
 `native/automotive/ARCHITECTURE.md` — where it and this plan disagree, the contract
 wins. The **release runbook** (Play form factor, automotive screenshots, the stricter
-car review, how three AABs ship together) will be `PLAY_STORE_AUTOMOTIVE.md` at the
+car review, how three AABs ship together) is `PLAY_STORE_AUTOMOTIVE.md` at the
 repo root (Wave 5).
 
 ## What already works today — and what AAOS is not
@@ -144,7 +144,13 @@ floors.
 - [x] Wave 3 — media service: browse tree from the patched Auto service,
       playback/downloads/progress from wear, framework play path wired
       (`onSetMediaItems`/`onAddMediaItems`/`onPlaybackResumption`)
-- [ ] Wave 4 — sign-in / settings / account (incl. mapping `NotConfigured` to
-      the sign-in resolution extras once the activity exists)
-- [ ] Wave 5 — Play docs + deploy
+- [x] Wave 4 — sign-in / settings / account: on-car sign-in form (phone-verbatim
+      error copy, demo-server prefill), APPLICATION_PREFERENCES settings with
+      sign-out + speed, mandatory AccountManager registration. Mapping
+      `NotConfigured` to the sign-in resolution extras waits on the Wave 6
+      emulator (the media3 1.8 spelling is the spike's to pin)
+- [x] Wave 5 — release plumbing: `PLAY_STORE_AUTOMOTIVE.md` at the repo root
+      (opt-in, review ladder, demo-server credentials, screenshot floors,
+      checklist) and `deploy-playstore.yml`'s third upload step
+      (`automotive:<track>`, last of three) behind a triple-AAB guard
 - [ ] Wave 6 — screenshots + validation
