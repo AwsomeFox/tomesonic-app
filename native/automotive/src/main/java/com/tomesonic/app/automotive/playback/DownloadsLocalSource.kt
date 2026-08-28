@@ -41,9 +41,11 @@ class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPl
             // call repository.warm() at startup — before the seed, this returns
             // null and a downloaded book would silently stream.
             repository.entryForNow(itemId, episodeId)
-        } catch (t: Throwable) {
+        } catch (e: Exception) {
             // The index is a file on disk; an unreadable one means "not
-            // downloaded", never a failed play.
+            // downloaded", never a failed play. Exception, not Throwable (a
+            // deliberate divergence from the wear donor, per review): a VM
+            // Error must fail the tap visibly, not quietly stream the book.
             null
         } ?: return null
 
@@ -57,7 +59,7 @@ class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPl
                 // Keyed by the ENTRY id, which IS the folder name: the item id
                 // for a book (unchanged), the episode's own key otherwise.
                 repository.localFile(entry.id, filename)
-            } catch (t: Throwable) {
+            } catch (e: Exception) {
                 null
             } ?: return null
             if (!file.exists()) return null
@@ -93,7 +95,18 @@ class DownloadsLocalSource(private val repository: DownloadRepository) : LocalPl
     /** The downloaded cover is a PATH; media3 wants a uri. */
     private fun coverUri(path: String?): String? {
         val raw = path?.takeIf { it.isNotBlank() } ?: return null
-        if (raw.startsWith("file://") || raw.startsWith("content://")) return raw
+        // The writer stores bare paths; the schemed branches are defensive.
+        // Either way a cover that is GONE answers null — media3 retrying a
+        // dead file:// uri per queue item is the failure mode this avoids.
+        if (raw.startsWith("file://")) {
+            val file = try {
+                File(Uri.parse(raw).path ?: return null)
+            } catch (e: Exception) {
+                return null
+            }
+            return if (file.exists()) raw else null
+        }
+        if (raw.startsWith("content://")) return raw
         val file = File(raw)
         return if (file.exists()) Uri.fromFile(file).toString() else null
     }
