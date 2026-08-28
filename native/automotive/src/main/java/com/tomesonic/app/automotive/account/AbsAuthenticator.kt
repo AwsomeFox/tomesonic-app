@@ -26,11 +26,12 @@ import com.tomesonic.app.automotive.ui.SignInActivity
  * DataStore and NOWHERE else (§6) — `getAuthToken` here would either lie or leak,
  * so it declines instead.
  *
- * The one deviation from that AOSP stub: it throws `UnsupportedOperationException`
- * from the methods it doesn't implement, and these return instead. A throw here
- * crosses a Binder into the AccountManagerService's caller — usually the car's
- * Settings app — and "the car's account screen crashed" is not a better answer
- * than "not supported".
+ * The one deviation from that AOSP stub: where the guide's sample throws
+ * `UnsupportedOperationException` from the methods it doesn't implement, the
+ * methods here RETURN (an error bundle or null) instead. A throw here crosses a
+ * Binder into the AccountManagerService's caller — usually the car's Settings
+ * app — and "the car's account screen crashed" is not a better answer than
+ * "not supported".
  */
 class AbsAuthenticator(private val context: Context) : AbstractAccountAuthenticator(context) {
 
