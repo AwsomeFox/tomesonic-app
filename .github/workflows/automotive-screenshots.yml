@@ -71,14 +71,23 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          # Play's two AAOS screenshot floors, which are also the two bundled
-          # emulator hardware profiles (developer.android.com, "Test using the
-          # Android Automotive OS emulator"): >=2 landscape at 1024x768 and >=2
-          # portrait at 800x1280, generic system image, no device frames.
-          # `avdmanager list device` is the authority on these ids; the "report
-          # capture sizes" step below prints the pixel size actually captured.
+          # Play's two AAOS screenshot floors (>=2 landscape at 1024x768, >=2
+          # portrait at 800x1280, generic system image, no device frames). BOTH
+          # legs create their AVD from automotive_1024p_landscape — the first
+          # run proved it is the one AAOS device id this runner's avdmanager
+          # actually has (`Error: No device found matching --device
+          # automotive_portrait`) — and the portrait leg then reshapes the
+          # framebuffer via config.ini in the pre-launch hook below. Deterministic
+          # ini keys beat gambling on a user devices.xml schema; revisit if the
+          # runner's SDK ever grows the real automotive_portrait definition.
+          # `profile` stays the SHOT name (capture.sh file prefix); `device` is
+          # what avdmanager gets.
           - profile: automotive_1024p_landscape
+            device: automotive_1024p_landscape
+            reshape: ""
           - profile: automotive_portrait
+            device: automotive_1024p_landscape
+            reshape: "800x1280"
     steps:
       # Same reclaim e2e-smoke and the wear rig do: the gradle build, the
       # emulator system image and the AVD together outgrow the runner's default
@@ -186,7 +195,9 @@ jobs:
           # Play-installed apps, which is useless in CI (ARCHITECTURE.md §11).
           target: android-automotive
           arch: x86_64
-          profile: ${{ matrix.profile }}
+          # The DEVICE id (see the matrix comment): landscape for both legs,
+          # because it is the only AAOS device this runner's avdmanager knows.
+          profile: ${{ matrix.device }}
           disable-animations: true
           # An AAOS image boots slower than a phone image, and this job's own
           # 50-minute cap is the real backstop.
@@ -194,6 +205,21 @@ jobs:
           # The action's own defaults, spelled out. -noaudio is kept: a runner
           # has no sound server, and nothing here plays a book.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Runs AFTER `avdmanager create avd`, BEFORE the emulator launches —
+          # the one hook where the AVD's framebuffer can be reshaped. The
+          # portrait leg turns the landscape device into Play's 800x1280 floor:
+          # skin.name=WxH is the emulator's frameless-resolution form, and the
+          # hw.lcd.* keys keep the framework's DisplayMetrics in agreement.
+          # Density stays the device profile's own (160), so the portrait shots
+          # render at the same scale the landscape ones do.
+          pre-emulator-launch-script: |
+            if [ -n "${{ matrix.reshape }}" ]; then
+              cfg="$HOME/.android/avd/test.avd/config.ini"
+              w="${{ matrix.reshape }}"; h="${w#*x}"; w="${w%x*}"
+              sed -i '/^skin\.name=/d;/^skin\.path=/d;/^hw\.lcd\.width=/d;/^hw\.lcd\.height=/d' "$cfg"
+              printf 'skin.name=%sx%s\nhw.lcd.width=%s\nhw.lcd.height=%s\n' "$w" "$h" "$w" "$h" >> "$cfg"
+              echo "reshaped $cfg to ${w}x${h}:"; grep -E '^(skin\.name|hw\.lcd\.)' "$cfg"
+            fi
           # ONE command: the action runs each line of an inline script in its
           # own shell (see e2e-smoke.yml), which no multi-step capture survives.
           script: bash native/automotive/screenshots/capture.sh
