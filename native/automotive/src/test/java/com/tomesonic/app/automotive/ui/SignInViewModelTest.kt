@@ -119,6 +119,35 @@ class SignInViewModelTest {
     }
 
     @Test
+    fun `a pasted uppercase scheme is not double-prefixed`() {
+        // Schemes are case-insensitive (RFC 3986) and pasted addresses shout.
+        // The case-sensitive check this pins against turned "HTTPS://host"
+        // into "https://HTTPS://host" — a sign-in that fails with a misleading
+        // reachability error. The scheme comes out lowered; the rest of the
+        // address is the user's.
+        assertEquals(
+            "https://abs.example.com",
+            SignInViewModel.normalizeEntry("HTTPS://abs.example.com")
+        )
+        assertEquals("http://Abs.Example.com", SignInViewModel.normalizeEntry("HTTP://Abs.Example.com"))
+        // And the backend sees the normalised string end to end.
+        val backend = FakeBackend()
+        backend.loginAnswer = success()
+        SignInViewModel(scope, backend).signIn("HTTPS://abs.example.com/", "tony", "hunter2")
+        assertEquals("https://abs.example.com", backend.loginCalls.single().first)
+    }
+
+    @Test
+    fun `a subpath server survives normalisation`() {
+        // A reverse-proxied ABS can live under a path; normalizeServer trims
+        // whitespace and trailing slashes and nothing more, on purpose.
+        assertEquals(
+            "https://host.example.com/abs",
+            SignInViewModel.normalizeEntry("host.example.com/abs/")
+        )
+    }
+
+    @Test
     fun `the password is passed through untrimmed`() {
         // Whitespace is a legal password character; trimming it would turn a
         // correct password into "Invalid username or password."

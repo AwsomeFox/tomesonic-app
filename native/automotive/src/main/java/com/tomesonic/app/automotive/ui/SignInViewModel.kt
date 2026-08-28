@@ -202,20 +202,29 @@ class SignInViewModel(
          * than the necessity it is on a watch — but the rule is the donor's and
          * both clients must read one typed address the same way.
          *
-         * Anything past the origin is dropped by [CredsRepository.normalizeServer] —
-         * every URL in the app is built by concatenating a leading-slash path
-         * onto this value.
+         * [CredsRepository.normalizeServer] then trims whitespace and trailing
+         * slashes — nothing more. A path segment SURVIVES on purpose: a
+         * self-hosted ABS behind a reverse proxy can live under one
+         * (https://host/abs), and every URL in the app is built by
+         * concatenating a leading-slash path onto this value.
          */
         fun normalizeEntry(raw: CharSequence?): String? {
             val text = raw?.toString()?.trim().orEmpty()
             if (text.isEmpty()) return null
-            val withScheme = if (text.startsWith("http://") || text.startsWith("https://")) {
-                text
+            // Scheme detection is CASE-INSENSITIVE (RFC 3986; pasted addresses
+            // and some car keyboards shout), and the scheme is stored lowered —
+            // "HTTPS://host" must not come out as "https://HTTPS://host".
+            val schemeMatch = SCHEME.find(text)
+            val withScheme = if (schemeMatch != null) {
+                schemeMatch.groupValues[1].lowercase() + "://" +
+                    text.substring(schemeMatch.value.length)
             } else {
                 "https://$text"
             }
             return CredsRepository.normalizeServer(withScheme).ifEmpty { null }
         }
+
+        private val SCHEME = Regex("^(https?)://", RegexOption.IGNORE_CASE)
 
         /** The line under the form. Null for a success — the activity finishes. */
         fun message(result: LoginResult): String? = when (result) {
