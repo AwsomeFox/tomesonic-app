@@ -206,20 +206,13 @@ jobs:
           # has no sound server, and nothing here plays a book.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # Runs AFTER `avdmanager create avd`, BEFORE the emulator launches —
-          # the one hook where the AVD's framebuffer can be reshaped. The
-          # portrait leg turns the landscape device into Play's 800x1280 floor:
-          # skin.name=WxH is the emulator's frameless-resolution form, and the
-          # hw.lcd.* keys keep the framework's DisplayMetrics in agreement.
-          # Density stays the device profile's own (160), so the portrait shots
-          # render at the same scale the landscape ones do.
-          pre-emulator-launch-script: |
-            if [ -n "${{ matrix.reshape }}" ]; then
-              cfg="$HOME/.android/avd/test.avd/config.ini"
-              w="${{ matrix.reshape }}"; h="${w#*x}"; w="${w%x*}"
-              sed -i '/^skin\.name=/d;/^skin\.path=/d;/^hw\.lcd\.width=/d;/^hw\.lcd\.height=/d' "$cfg"
-              printf 'skin.name=%sx%s\nhw.lcd.width=%s\nhw.lcd.height=%s\n' "$w" "$h" "$w" "$h" >> "$cfg"
-              echo "reshaped $cfg to ${w}x${h}:"; grep -E '^(skin\.name|hw\.lcd\.)' "$cfg"
-            fi
+          # the one hook where the AVD's framebuffer can be reshaped (the
+          # portrait leg turns the landscape device into Play's 800x1280
+          # floor). ONE line, same rule as `script:` below — the action runs
+          # each inline line in its own shell, and the first reshaped run
+          # failed on exactly that with a multi-line block here. The empty
+          # landscape arg makes the script a no-op.
+          pre-emulator-launch-script: bash native/automotive/screenshots/reshape-avd.sh "${{ matrix.reshape }}"
           # ONE command: the action runs each line of an inline script in its
           # own shell (see e2e-smoke.yml), which no multi-step capture survives.
           script: bash native/automotive/screenshots/capture.sh

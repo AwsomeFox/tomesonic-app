@@ -202,6 +202,21 @@ shoot() {
   local name="$1"
   local path="$OUT/${PROFILE}-${name}.png"
   adb exec-out screencap -p > "$path"
+  # AAOS exposes multiple displays (cluster and all), and screencap prints a
+  # multi-display WARNING into the same stdout the PNG rides — the first runs
+  # produced files with 347 bytes of prose before the magic, which Play (and
+  # `file`) reject. Strip to the PNG signature; a capture with no signature at
+  # all is a real failure, not a byte-cleanup problem.
+  python3 - "$path" <<'PY' || fail "${PROFILE}-${name}.png has no PNG signature — screencap produced no image"
+import sys
+p = sys.argv[1]
+d = open(p, "rb").read()
+i = d.find(b"\x89PNG\r\n\x1a\n")
+if i < 0:
+    sys.exit(1)
+if i > 0:
+    open(p, "wb").write(d[i:])
+PY
   if [ -s "$path" ]; then
     echo "captured ${PROFILE}-${name}.png ($(wc -c < "$path") bytes)"
   else
