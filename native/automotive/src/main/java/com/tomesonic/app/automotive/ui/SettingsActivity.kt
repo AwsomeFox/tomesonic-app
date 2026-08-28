@@ -17,11 +17,13 @@ import com.tomesonic.app.automotive.R
 import com.tomesonic.app.automotive.account.AbsAuthenticator
 import com.tomesonic.app.automotive.data.CredsRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 /**
@@ -230,8 +232,10 @@ class SettingsActivity : AppCompatActivity() {
                     // screen stay.
                     return@launch
                 }
-                // The AccountManager row mirrors the store, so it goes too.
-                AbsAuthenticator.forget(requireContext().applicationContext)
+                // The AccountManager row mirrors the store, so it goes too
+                // — off the UI thread, same binder-IPC rule as ensure().
+                val app = requireContext().applicationContext
+                withContext(Dispatchers.IO) { AbsAuthenticator.forget(app) }
                 // Finish to nothing: whatever opened this screen (the car's
                 // Settings, the Media Center) is what the user goes back to.
                 activity?.finish()

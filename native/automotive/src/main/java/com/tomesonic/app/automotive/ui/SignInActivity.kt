@@ -20,11 +20,13 @@ import com.tomesonic.app.automotive.Graph
 import com.tomesonic.app.automotive.R
 import com.tomesonic.app.automotive.account.AbsAuthenticator
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The car's sign-in screen (ARCHITECTURE.md §6): server address, username,
@@ -218,7 +220,12 @@ class SignInActivity : AppCompatActivity() {
             }
             if (creds != null) {
                 val name = AbsAuthenticator.accountName(creds.username, creds.server)
-                AbsAuthenticator.ensure(this@SignInActivity, name)
+                // AccountManager's calls are synchronous binder IPC — off the
+                // UI thread, or a slow AccountManagerService spends sign-in's
+                // last frames blocked inside a system service (Copilot round).
+                withContext(Dispatchers.IO) {
+                    AbsAuthenticator.ensure(this@SignInActivity, name)
+                }
                 authenticatorResult = Bundle().apply {
                     putString(AccountManager.KEY_ACCOUNT_NAME, name)
                     putString(AccountManager.KEY_ACCOUNT_TYPE, AbsAuthenticator.ACCOUNT_TYPE)
