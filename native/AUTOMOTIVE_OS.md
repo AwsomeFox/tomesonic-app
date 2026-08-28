@@ -118,9 +118,11 @@ real-car audio focus: browse via the car Media Center, sign-in, VHAL-simulated
 driving/parked states for the distraction rules. CI screenshots ride the wear rig
 pattern (`reactivecircus/android-emulator-runner` supports `target:
 android-automotive`), with one twist: there is **no launcher activity** — the rig
-opens the app through the Media Center intent, not `am start`. The two bundled
-emulator profiles (1024p landscape, portrait) are exactly Play's two screenshot
-floors.
+opens the app through the Media Center intent, not `am start`. The rig's two
+legs land exactly on Play's two screenshot floors: the bundled 1024p landscape
+profile, plus a portrait leg that reshapes the same profile's framebuffer via
+`screenshots/reshape-avd.sh` (the runner's SDK ships no portrait AVD
+definition).
 
 ## Phasing
 
@@ -158,7 +160,12 @@ floors.
       `screenshots/capture.sh` driving the Media Center by the verified
       `MEDIA_TEMPLATE` intent, `screenshots/mock_abs.py`, a debug-only
       `DebugSeed` receiver in `src/debug/` that signs the car in, and a VHAL
-      driving/parked smoke test. Written and self-checked against the documented
-      API surfaces (`screenshots/README.md` marks every string verified vs
-      to-confirm); the **first green dispatch run is the runtime validation** —
-      nothing in this wave can be proved by a JVM test.
+      driving/parked smoke test. **Proven at runtime** — nothing in this wave
+      could be proved by a JVM test, so the green dispatch run is the evidence:
+      both legs passed, the car's Media Center opened `AbsLibraryService` via
+      the verified V1 `MEDIA_TEMPLATE` action, browse was walked by visible
+      text, and the VHAL smoke recorded the parked-only gate
+      (`ActivityBlockingActivity` foreground while driving, sign-in held back,
+      Settings restored on park). The 14 Play-floor screenshots
+      (7 × 1024×768 landscape, 7 × 800×1280 portrait) are bot-committed as
+      signature-verified PNGs under `screenshots/shots/`.
