@@ -25,7 +25,12 @@
          server never authorized. usesCleartextTraffic=true: self-hosted ABS
          servers are very often plain http on a LAN — same posture as :wear and
          the phone app. -->
+    <!-- android:name is the ONLY init site for Graph (Wave 2): with no launcher
+         activity, every start of this process is the Media Center binding or
+         starting AbsLibraryService, and Application.onCreate still runs first in
+         all of them. -->
     <application
+        android:name="com.tomesonic.app.automotive.MainApplication"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"

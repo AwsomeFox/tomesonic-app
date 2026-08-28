@@ -146,4 +146,12 @@ dependencies {
     // ApplicationProvider (androidx.test.core.app) — the only androidx.test
     // artifact the tests import.
     testImplementation 'androidx.test:core:1.6.1'
+
+    // Wave 2 data layer. Same artifact and version :wear pins: AbsClient is an
+    // OkHttp client + interceptor, and HttpUrl is what its origin check (and
+    // AbsClientOriginTest) compares scheme/host/port on. An `implementation`
+    // dep is on the unit-test compile classpath too, so the tests need no
+    // second line — and the data tests deliberately add no coroutine-test or
+    // MockWebServer dependency, exactly as :wear's don't.
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
