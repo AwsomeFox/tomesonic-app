@@ -153,4 +153,12 @@ floors.
       (opt-in, review ladder, demo-server credentials, screenshot floors,
       checklist) and `deploy-playstore.yml`'s third upload step
       (`automotive:<track>`, last of three) behind a triple-AAB guard
-- [ ] Wave 6 — screenshots + validation
+- [x] Wave 6 — screenshots + validation: `automotive-screenshots.yml` (dispatch +
+      rig-scoped paths, two AAOS emulator legs on Play's two screenshot floors),
+      `screenshots/capture.sh` driving the Media Center by the verified
+      `MEDIA_TEMPLATE` intent, `screenshots/mock_abs.py`, a debug-only
+      `DebugSeed` receiver in `src/debug/` that signs the car in, and a VHAL
+      driving/parked smoke test. Written and self-checked against the documented
+      API surfaces (`screenshots/README.md` marks every string verified vs
+      to-confirm); the **first green dispatch run is the runtime validation** —
+      nothing in this wave can be proved by a JVM test.
