@@ -67,6 +67,7 @@
       "./plugins/withSecureBackupRules",
       "./plugins/withMedia3NotificationIcon",
       "./plugins/withWearApp",
+      "./plugins/withAutomotiveApp",
       "./plugins/withWearBridge",
       [
         "expo-build-properties",

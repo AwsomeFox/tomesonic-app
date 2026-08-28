@@ -66,12 +66,13 @@ jobs:
         # snippet resolves its script path via `node --print require.resolve`,
         # which needs native/node_modules reachable from the working directory.
         # The Android SDK is preinstalled on ubuntu-latest (same assumption
-        # build-apk relies on). Scoped to :app and :wear so autolinked library
-        # modules don't drag their own (untended) test tasks into this job.
+        # build-apk relies on). Scoped to :app, :wear and :automotive so
+        # autolinked library modules don't drag their own (untended) test tasks
+        # into this job.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-        run: ./gradlew :app:testDebugUnitTest :wear:testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :wear:testDebugUnitTest :automotive:testDebugUnitTest --no-daemon --stacktrace
 
       - name: fail if no tests ran
         # testDebugUnitTest PASSES with zero compiled test sources, so a
@@ -81,7 +82,8 @@ jobs:
         run: |
           for results in \
             native/android/app/build/test-results/testDebugUnitTest \
-            native/wear/build/test-results/testDebugUnitTest; do
+            native/wear/build/test-results/testDebugUnitTest \
+            native/automotive/build/test-results/testDebugUnitTest; do
             count=$(grep -rho '<testcase' "$results" --include='*.xml' 2>/dev/null | wc -l)
             echo "executed test cases in $results: $count"
             if [ "$count" -eq 0 ]; then
@@ -100,3 +102,5 @@ jobs:
             native/android/app/build/test-results/
             native/wear/build/reports/tests/
             native/wear/build/test-results/
+            native/automotive/build/reports/tests/
+            native/automotive/build/test-results/

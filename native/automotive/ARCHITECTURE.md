@@ -198,9 +198,13 @@ the car process can't read this app's private `file://` paths.
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+  <!-- allowBackup=false (the DataStore token must not ride auto-backup) and
+       cleartext=true (self-hosted ABS is often plain http) — same as :wear. -->
   <application
       android:label="@string/app_name"
       android:icon="@mipmap/ic_launcher"
+      android:allowBackup="false"
+      android:usesCleartextTraffic="true"
       android:appCategory="audio">
 
     <!-- AAOS descriptor. This name — NOT com.google.android.gms.car.application,

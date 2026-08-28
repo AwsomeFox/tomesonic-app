@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Marks this APK/AAB as the car artifact of the com.tomesonic.app Play
+         listing — Play only serves it to Android Automotive OS devices. -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- There is NO launcher activity in this artifact, ever: AAOS shows no
+         launcher icon for a media app and opens it by explicit intent from the
+         Media Center. ManifestRulesTest asserts the absence. -->
+    <!-- Component names are FULLY QUALIFIED, matching the :wear manifest:
+         applicationId (com.tomesonic.app) differs from the namespace
+         (com.tomesonic.app.automotive), so a leading-dot name — though the
+         merger does expand it against the namespace — is the one thing that
+         reads wrong here. -->
+    <!-- allowBackup=false: Wave 2 keeps the ABS access token in DataStore, and
+         a token must not ride device-to-device auto-backup onto hardware the
+         server never authorized. usesCleartextTraffic=true: self-hosted ABS
+         servers are very often plain http on a LAN — same posture as :wear and
+         the phone app. -->
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true"
+        android:appCategory="audio">
+
+        <!-- The AAOS descriptor, deliberately under this name and not Android
+             Auto's car-application descriptor: that one belongs to the phone
+             artifact and must never ride in this one. ManifestRulesTest greps
+             this file for its literal spelling, which is why the spelling is
+             not written out even in a comment. -->
+        <meta-data
+            android:name="com.android.automotive"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- The app's entire surface. exported=true is REQUIRED: the car's
+             Media Center, the Assistant and AVRCP all bind in from OUTSIDE this
+             app, and androidx.media3.session.MediaLibraryService is what a
+             SessionToken resolves to; the legacy MediaBrowserService action is
+             what pre-media3 car browse clients look for. mediaPlayback matches
+             the FOREGROUND_SERVICE_MEDIA_PLAYBACK permission above.
+
+             Later waves declare their own components next to the classes that
+             land — an unimplemented <service>/<activity> fails lintVitalRelease
+             with MissingClass, and github-releases.yml passes `-x lint` so PR
+             CI would not catch it (ARCHITECTURE.md §5). -->
+        <service
+            android:name="com.tomesonic.app.automotive.media.AbsLibraryService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
