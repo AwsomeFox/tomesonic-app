@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The settings host: a header row and a container for the PreferenceFragmentCompat.
+
+  The header exists because the theme is `NoActionBar`, and that is deliberate.
+  This module targets SDK 35, where the platform lays every window out
+  edge-to-edge and no longer insets the decor for the app — an ActionBar would
+  need its own inset handling to stay clear of the car's status bar (AR-1), and
+  a header we lay out ourselves is one we can pad from a single insets listener
+  in SettingsActivity. It also gives the screen the explicit way back the car
+  quality bar asks for, next to (not instead of) the head unit's system back.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settings_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?android:attr/colorBackground"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="8dp">
+
+        <Button
+            android:id="@+id/settings_back"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:minWidth="88dp"
+            android:text="@string/settings_back"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/settings_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/app_settings_activity_title"
+            android:textColor="?android:attr/textColorPrimary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/settings_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

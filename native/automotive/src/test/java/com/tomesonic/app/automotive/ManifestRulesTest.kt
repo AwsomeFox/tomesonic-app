@@ -21,9 +21,12 @@ import javax.xml.parsers.DocumentBuilderFactory
  * loop for all of it.
  *
  * Plain JUnit on purpose: it reads the SOURCE manifest off disk, so it needs no
- * Robolectric runtime and runs in milliseconds. Nothing merges into this module
- * today — it has no manifest-carrying dependencies — so the source manifest is
- * the artifact's manifest.
+ * Robolectric runtime and runs in milliseconds. Library manifests do merge on
+ * top of it (androidx.work's foreground service; appcompat and preference,
+ * which declare no components of their own), but every rule below is about what
+ * THIS artifact declares — the launcher activity we must not have, the
+ * meta-data we must not carry, the components each wave must land next to its
+ * classes — and that is decided here, in the file under review.
  */
 class ManifestRulesTest {
 
@@ -50,6 +53,21 @@ class ManifestRulesTest {
             "android.intent.category.LAUNCHER must not appear in ${manifestFile.name}",
             names("category").contains("android.intent.category.LAUNCHER")
         )
+        // Named, not just counted. The global assertions above go green on a
+        // manifest that has lost an activity entirely; these two are the ones
+        // a copied <activity> block would break, so they are asserted ON those
+        // two activities by name.
+        for (name in PARKED_ACTIVITIES) {
+            val activity = requireComponent("activity", name)
+            assertFalse(
+                "$name must not carry an ACTION_MAIN intent-filter",
+                activity.descendantNames("action").contains("android.intent.action.MAIN")
+            )
+            assertFalse(
+                "$name must not carry a CATEGORY_LAUNCHER intent-filter",
+                activity.descendantNames("category").contains("android.intent.category.LAUNCHER")
+            )
+        }
     }
 
     @Test
@@ -58,6 +76,75 @@ class ManifestRulesTest {
         // present." Sign-in and settings are parked-only by policy.
         val offenders = names("meta-data").filter { it.contains("distractionOptimized") }
         assertTrue("distractionOptimized meta-data found: $offenders", offenders.isEmpty())
+        // And again per activity: this meta-data is exactly what someone
+        // reaches for when a car screen "doesn't show while driving", and it is
+        // these two activities they would reach for it on.
+        for (name in PARKED_ACTIVITIES) {
+            val found = requireComponent("activity", name)
+                .descendantNames("meta-data")
+                .filter { it.contains("distractionOptimized") }
+            assertTrue("$name is marked distractionOptimized: $found", found.isEmpty())
+        }
+    }
+
+    @Test
+    fun theTwoParkedActivitiesAreDeclaredAndExported() {
+        // Both are started from OUTSIDE this app — the Media Center's sign-in
+        // affordance, the car's Settings, AccountManager's account picker — so
+        // exported=true is functional, not incidental. They are also the only
+        // two activities the artifact is allowed to have (§1, PE-1): no
+        // functionality outside setup/sign-in/settings while parked, satisfied
+        // by construction.
+        assertEquals(
+            "the shipped artifact declares exactly the sign-in and settings activities — " +
+                "a dev-only screen (the Wave 6 screenshot rig's, say) belongs in " +
+                "src/debug/AndroidManifest.xml, which never reaches a review build",
+            PARKED_ACTIVITIES.toSet(),
+            names("activity").toSet()
+        )
+        for (name in PARKED_ACTIVITIES) {
+            assertEquals(
+                "$name must be exported",
+                "true",
+                requireComponent("activity", name).getAttribute("android:exported")
+            )
+        }
+    }
+
+    @Test
+    fun theSettingsActivityIsTheApplicationPreferencesTarget() {
+        // What puts "TomeSonic settings" in the car's own Settings app. The
+        // label is part of it: the head unit renders that string, not the
+        // activity's class name.
+        val settings = requireComponent("activity", SETTINGS_ACTIVITY)
+        assertTrue(
+            "$SETTINGS_ACTIVITY must answer ACTION_APPLICATION_PREFERENCES",
+            settings.descendantNames("action")
+                .contains("android.intent.action.APPLICATION_PREFERENCES")
+        )
+        assertEquals(
+            "@string/app_settings_activity_title",
+            settings.getAttribute("android:label")
+        )
+    }
+
+    @Test
+    fun theAccountAuthenticatorServiceIsDeclaredWithItsDescriptor() {
+        // AccountManager is mandatory on AAOS (§6). The service is bound by
+        // AccountManagerService from outside this app — un-exported, it is
+        // simply never called and the account type does not exist — and the
+        // account type itself is read from the meta-data resource, not from the
+        // Kotlin, so a missing meta-data is a silently account-less build.
+        val service = requireComponent("service", AUTHENTICATOR_SERVICE)
+        assertEquals("$AUTHENTICATOR_SERVICE must be exported", "true", service.getAttribute("android:exported"))
+        assertTrue(
+            "$AUTHENTICATOR_SERVICE must answer android.accounts.AccountAuthenticator",
+            service.descendantNames("action").contains("android.accounts.AccountAuthenticator")
+        )
+        val descriptor = service.descendants("meta-data")
+            .firstOrNull { it.androidName() == "android.accounts.AccountAuthenticator" }
+        assertNotNull("$AUTHENTICATOR_SERVICE is missing its authenticator meta-data", descriptor)
+        assertEquals("@xml/authenticator", descriptor!!.getAttribute("android:resource"))
     }
 
     @Test
@@ -97,10 +184,37 @@ class ManifestRulesTest {
 
     private fun names(tag: String): List<String> = elements(tag).mapNotNull { it.androidName() }
 
+    /** The named component, or a failure that says which one is missing. */
+    private fun requireComponent(tag: String, name: String): Element {
+        val found = elements(tag).firstOrNull { it.androidName() == name }
+        assertNotNull("<$tag> $name is missing from ${manifestFile.name}", found)
+        return found!!
+    }
+
+    private fun Element.descendants(tag: String): List<Element> {
+        val nodes = getElementsByTagName(tag)
+        return (0 until nodes.length).map { nodes.item(it) as Element }
+    }
+
+    private fun Element.descendantNames(tag: String): List<String> =
+        descendants(tag).mapNotNull { it.androidName() }
+
     private fun Element.androidName(): String? =
         getAttribute("android:name").takeIf { it.isNotEmpty() }
 
     private companion object {
+
+        // Fully qualified, matching the manifest's stated convention: the
+        // applicationId (com.tomesonic.app) differs from the namespace, so a
+        // leading-dot name is the one thing that reads wrong there.
+        const val SIGN_IN_ACTIVITY = "com.tomesonic.app.automotive.ui.SignInActivity"
+        const val SETTINGS_ACTIVITY = "com.tomesonic.app.automotive.ui.SettingsActivity"
+        const val AUTHENTICATOR_SERVICE =
+            "com.tomesonic.app.automotive.account.AbsAuthenticatorService"
+
+        /** The whole of this artifact's activity surface (§5, PE-1). */
+        val PARKED_ACTIVITIES = listOf(SIGN_IN_ACTIVITY, SETTINGS_ACTIVITY)
+
         /**
          * Gradle runs unit tests with the module directory as the working
          * directory, but that is a default rather than a contract — and the

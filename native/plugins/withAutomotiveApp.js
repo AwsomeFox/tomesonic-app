@@ -8,8 +8,9 @@ const { withSettingsGradle, withGradleProperties } = require("@expo/config-plugi
 // idempotent.
 //
 // Unlike withWearApp there is no root-buildscript half: :automotive applies no
-// Compose compiler plugin (the car's Media Center draws the UI), so
-// settings.gradle is the only file it needs to touch.
+// Compose compiler plugin (the car's Media Center draws the UI). Two files get
+// touched: settings.gradle (the include) and gradle.properties (the daemon
+// heap — see JVM_ARGS below).
 
 // settings.gradle: include the sibling module.
 const SETTINGS_MARKER = "project(':automotive').projectDir";

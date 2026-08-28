@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      The theme for the module's two activities, and for nothing else — it is
+      declared on each <activity> rather than on <application> so the media
+      service (which draws no UI at all) keeps the platform default.
+
+      AppCompat rather than the platform's DeviceDefault, and the reason is the
+      settings screen: PreferenceFragmentCompat needs a FragmentActivity host
+      and an AppCompat-derived theme to inflate against. Both activities then
+      use the SAME base, because a module with two screens on two theming
+      systems is a module where the next change has to ask which one it is in.
+
+      DayNight because a head unit switches day/night on its own (lights, time
+      of day) and a form that stays white at night is exactly the contrast
+      problem VD-1 is about. NoActionBar because SDK 35 lays every window out
+      edge-to-edge: the activities pad their own roots from a WindowInsets
+      listener (AR-1), and an ActionBar would be the one piece of chrome outside
+      the view they can reach.
+    -->
+    <style name="Theme.TomeSonic.Car" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <!-- Required by androidx.preference; without it PreferenceFragmentCompat
+             falls back to its own default overlay, which is not derived from
+             this theme. -->
+        <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
+    </style>
+</resources>

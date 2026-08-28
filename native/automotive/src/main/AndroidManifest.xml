@@ -69,6 +69,66 @@
             </intent-filter>
         </service>
 
+        <!-- Wave 4: the app's only two screens (ARCHITECTURE.md §5, §6).
+
+             PARKED-ONLY BY SYSTEM POLICY. Neither activity carries a
+             `distractionOptimized` meta-data element and neither ever may —
+             "Your app will be rejected during review if such an element is
+             present" — so the platform, not this app, decides they are
+             unavailable while driving. Nothing in the Kotlin asks about driving
+             state either. ManifestRulesTest asserts the absence by name.
+
+             Neither carries an ACTION_MAIN/CATEGORY_LAUNCHER filter, for the
+             same reason nothing in this artifact does: there is no launcher
+             icon on AAOS.
+
+             android:theme is on the activities rather than on <application>:
+             the media service draws no UI and has no business inheriting an
+             AppCompat theme, and Theme.TomeSonic.Car is what
+             PreferenceFragmentCompat (and AppCompatActivity) require.
+
+             No windowSoftInputMode on either: both go edge-to-edge explicitly
+             (WindowCompat.setDecorFitsSystemWindows(window, false)) and pad
+             themselves from the IME inset, which is ONE keyboard-handling path
+             on every api level rather than two that overlap. -->
+        <activity
+            android:name="com.tomesonic.app.automotive.ui.SignInActivity"
+            android:exported="true"
+            android:theme="@style/Theme.TomeSonic.Car" />
+
+        <!-- The car's Settings entry. The action is what makes the head unit
+             offer "TomeSonic settings" next to the app; CATEGORY_DEFAULT is
+             carried because a caller that starts this implicitly (rather than
+             by the component it resolved) needs it, and it costs nothing on the
+             explicit path. -->
+        <activity
+            android:name="com.tomesonic.app.automotive.ui.SettingsActivity"
+            android:exported="true"
+            android:label="@string/app_settings_activity_title"
+            android:theme="@style/Theme.TomeSonic.Car">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- AccountManager (mandatory on AAOS — §6: the car's Settings account
+             UI and guest mode's DISALLOW_MODIFY_ACCOUNTS both act through it).
+             exported=true is REQUIRED for the same reason it is on the media
+             service: AccountManagerService binds in from OUTSIDE this app, and
+             an un-exported authenticator is never called at all. The account
+             type lives in @xml/authenticator; tokens stay in the DataStore. -->
+        <service
+            android:name="com.tomesonic.app.automotive.account.AbsAuthenticatorService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/authenticator" />
+        </service>
+
         <!-- WorkManager's own foreground service declares NO foregroundServiceType
              in the library manifest, and with targetSdk 34+ the system refuses
              the promotion without one — the DownloadWorker's "Downloading…"

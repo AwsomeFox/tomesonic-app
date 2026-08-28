@@ -1,3 +1,32 @@
 <resources>
   <string name="app_name">TomeSonic</string>
+
+  <!-- The car's Settings app renders this next to the app icon for the
+       ACTION_APPLICATION_PREFERENCES activity. -->
+  <string name="app_settings_activity_title">TomeSonic settings</string>
+
+  <!-- Sign-in form. The ERROR sentences are deliberately not here: they are
+       SignInViewModel's constants, shared verbatim with the phone's
+       ConnectScreen, and a resource copy of them is a second place for them to
+       drift. -->
+  <string name="sign_in_title">Sign in</string>
+  <string name="sign_in_subtitle">Connect this car to your Audiobookshelf server.</string>
+  <string name="sign_in_server_hint">Server address</string>
+  <string name="sign_in_username_hint">Username</string>
+  <string name="sign_in_password_hint">Password</string>
+  <string name="sign_in_submit">Sign in</string>
+  <string name="sign_in_demo">Use demo server</string>
+
+  <!-- Settings. Preference titles live here; their KEYS live in
+       SettingsActivity, which is the only thing that reads them. -->
+  <string name="settings_back">Back</string>
+  <string name="settings_category_server">Server</string>
+  <string name="settings_account_title">Signed in as</string>
+  <string name="settings_account_signed_out">Not signed in</string>
+  <string name="settings_sign_out_title">Sign out</string>
+  <string name="settings_sign_out_summary">Forget this server on this car.</string>
+  <string name="settings_sign_out_confirm">Sign out of TomeSonic on this car? Your downloads stay on the car; listening that hasn\'t reached the server yet is lost.</string>
+  <string name="settings_sign_out_cancel">Cancel</string>
+  <string name="settings_category_playback">Playback</string>
+  <string name="settings_speed_title">Playback speed</string>
 </resources>

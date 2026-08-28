@@ -163,4 +163,22 @@ dependencies {
     // DownloadRepositoryTest's status-fold table needs — `work-testing` stays
     // deliberately absent, exactly as on :wear.
     implementation 'androidx.work:work-runtime-ktx:2.10.1'
+
+    // Wave 4 UI — the module's ONLY two screens (sign-in and settings), and the
+    // only reason it has a view dependency at all.
+    //
+    // preference-ktx is not optional for the settings screen: the
+    // ACTION_APPLICATION_PREFERENCES target is a PreferenceFragmentCompat, and
+    // the platform's android.preference.PreferenceFragment it replaced has been
+    // deprecated since API 29.
+    //
+    // appcompat rides in transitively with it, and is declared anyway: both
+    // activities extend AppCompatActivity directly and both are themed from
+    // Theme.AppCompat.DayNight (which is also what a preference screen inflates
+    // against), so this module imports it first-hand rather than borrowing
+    // another artifact's export. No Material Components and no Compose — the
+    // car's Media Center draws browse and now-playing, and two plain-view
+    // screens do not earn a design system.
+    implementation 'androidx.preference:preference-ktx:1.2.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
 }
