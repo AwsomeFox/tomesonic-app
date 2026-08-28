@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { haptic } from "../utils/haptics";
+import { PEEK_HANDLE_H } from "../utils/playerLayout";
 
 const ROW_H = 52;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -57,11 +58,12 @@ function secondsToTimestamp(seconds: number) {
 }
 
 /**
- * Height of the collapsed "Chapters & Up Next" peek handle. Exported so the
- * landscape player pane can budget exactly this much bottom padding — a
- * drifted copy would let the transport/pill slide under the handle.
+ * Height of the collapsed "Chapters & Up Next" peek handle. Lives in the pure
+ * playerLayout module (the expanded-player fit math budgets it) and is
+ * re-exported here for the player pane's bottom padding — a drifted copy
+ * would let the transport/pill slide under the handle.
  */
-export const PEEK_HANDLE_H = 54;
+export { PEEK_HANDLE_H };
 
 export default function PlayerChaptersQueueSheet({
   mainPlayerProgress,
@@ -290,19 +292,28 @@ export default function PlayerChaptersQueueSheet({
               borderBottomColor: colors.outlineVariant,
             }}
           >
-            {/* Decorative Drag Handle */}
+            {/* Decorative Drag Handle. Centered by a full-width wrapper —
+                left:"50%" + negative margin resolves against the padding box
+                here, which drifted the pill off-center on wide screens. */}
             <View
+              pointerEvents="none"
               style={{
                 position: "absolute",
                 top: 8,
-                left: "50%",
-                marginLeft: -18,
-                width: 36,
-                height: 4,
-                borderRadius: 3,
-                backgroundColor: colors.outlineVariant,
+                left: 0,
+                right: 0,
+                alignItems: "center",
               }}
-            />
+            >
+              <View
+                style={{
+                  width: 36,
+                  height: 4,
+                  borderRadius: 3,
+                  backgroundColor: colors.outlineVariant,
+                }}
+              />
+            </View>
 
             <Icon
               name={activeTab === "chapters" ? "list" : "playlist-add"}

@@ -5,15 +5,21 @@ import androidx.lifecycle.viewModelScope
 import com.tomesonic.app.wear.Graph
 import com.tomesonic.app.wear.data.ItemDetail
 import com.tomesonic.app.wear.data.LastItem
+import com.tomesonic.app.wear.downloads.DownloadEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class HomeUiState(
     val loading: Boolean = true,
-    val rows: List<HomeRow> = emptyList()
+    val rows: List<HomeRow> = emptyList(),
+    /** What the download affordances read, via [HomeSections.downloadState]. */
+    val downloads: List<DownloadEntry> = emptyList(),
+    val requestedDownloads: Set<String> = emptySet()
 )
 
 /**
@@ -57,16 +63,58 @@ class HomeViewModel : ViewModel() {
             val resume = HomeSections.resume(last, downloads, inProgress)
                 ?: expandedResume(last, offline)
 
-            _state.value = HomeUiState(
-                loading = false,
-                rows = HomeSections.build(
-                    resume = resume,
-                    inProgress = inProgress,
-                    libraries = libraries,
-                    downloadCount = downloads.size,
-                    offline = offline
+            // update {}, not a value assignment: a download tap landing while
+            // the awaits above were suspended must survive this write, and the
+            // markers it carries live in the SAME state object. The rows are
+            // this coroutine's; requestedDownloads is whatever is CURRENT.
+            _state.update { current ->
+                HomeUiState(
+                    loading = false,
+                    rows = HomeSections.build(
+                        resume = resume,
+                        inProgress = inProgress,
+                        libraries = libraries,
+                        downloadCount = downloads.size,
+                        offline = offline
+                    ),
+                    downloads = downloads,
+                    // Pending markers survive a refresh (a queued download is
+                    // still no entry — charger + Wi-Fi can be hours away);
+                    // markers whose entry has LANDED are dropped, or a later
+                    // delete would resurrect them as a false "Requested".
+                    requestedDownloads = HomeSections.pruneRequested(
+                        current.requestedDownloads, downloads
+                    )
                 )
-            )
+            }
+        }
+    }
+
+    /**
+     * The home affordance's one verb: enqueue with the DEFAULT constraints —
+     * the escape hatch ("Download now") and every other download state live on
+     * the item screen, which the affordance opens once a request is in flight.
+     */
+    fun download(itemId: String, episodeId: String?) {
+        val key = HomeSections.downloadKey(itemId, episodeId)
+        // Atomic in both directions: refresh() writes this state concurrently,
+        // and a read-modify-write here could lose either its rows or this mark.
+        _state.update { it.copy(requestedDownloads = it.requestedDownloads + key) }
+        viewModelScope.launch {
+            // enqueue reports rather than throws (a quiet refusal — unsafe id,
+            // WorkManager unavailable — is deliberate); the catch covers only
+            // what can still throw around it (an uninitialised Graph).
+            val queued = try {
+                Graph.downloadRepository.enqueue(itemId, episodeId?.takeIf { it.isNotBlank() })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                false
+            }
+            if (!queued) {
+                // Un-mark, so the row honestly re-offers the download.
+                _state.update { it.copy(requestedDownloads = it.requestedDownloads - key) }
+            }
         }
     }
 

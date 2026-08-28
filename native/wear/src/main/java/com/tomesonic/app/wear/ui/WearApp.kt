@@ -143,7 +143,8 @@ fun WearApp() {
                                 onOpenLibrary = { navController.navigate(Routes.library(it)) },
                                 onOpenSearch = { navController.navigate(Routes.search(it)) },
                                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
-                                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+                                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                                onOpenItem = { navController.navigate(Routes.item(it)) }
                             )
                         }
 

@@ -38,7 +38,7 @@ import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
 import { CastContext, CastButton } from "react-native-google-cast";
 import PlayerOverflowModal from "./PlayerOverflowModal";
-import PlayerChaptersQueueSheet, { PEEK_HANDLE_H } from "./PlayerChaptersQueueSheet";
+import PlayerChaptersQueueSheet from "./PlayerChaptersQueueSheet";
 import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
@@ -46,7 +46,7 @@ import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction } from "../utils/formatSwitch";
 import { haptic } from "../utils/haptics";
-import { computePlayerLayout } from "../utils/playerLayout";
+import { computePlayerLayout, PEEK_HANDLE_H } from "../utils/playerLayout";
 import Pressable from "./HintPressable";
 import { MINIPLAYER_HEIGHT } from "../utils/layoutConstants";
 
@@ -1119,7 +1119,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
             <ScrollView
-              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 58 + insets.bottom }}
+              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: PEEK_HANDLE_H + 12 + insets.bottom }}
               showsVerticalScrollIndicator={false}
               scrollEnabled={contentOverflows} // Off so the drag gesture runs cleanly; on when the block overflows the viewport (estimated OR measured) so the bottom pill stays reachable
               onLayout={(e) => setSvViewportH(e.nativeEvent.layout.height)}

@@ -14,6 +14,8 @@ import com.tomesonic.app.wear.data.CredsRepository
 import com.tomesonic.app.wear.data.PlaySession
 import com.tomesonic.app.wear.tile.TileRefresh
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -221,8 +223,59 @@ class SessionManager(
         queue = queue
     )
 
+    /**
+     * Serialises [play] and [stop]. The service answers custom commands with
+     * fire-and-forget coroutines, so without this a double-tap (watch taps
+     * bounce) interleaves two teardown/rebuild sequences over one player —
+     * handOffs, setMediaItems and PlaybackState writes in whatever order the
+     * dispatcher felt like.
+     */
+    private val commandMutex = Mutex()
+
     suspend fun play(itemId: String, episodeId: String? = null): PlayResult {
         if (itemId.isBlank()) return PlayResult.NoTracks
+        // Unlocked fast path, READS ONLY: re-tapping the book that is already
+        // audibly playing answers Ok without queueing behind a switch that is
+        // mid-resolve (the mutex is held across a network round trip — a
+        // deliberate trade: a stop tapped during a slow resolve waits a few
+        // seconds and then wins, which beats the interleaving the mutex
+        // prevents). EVERY player MUTATION stays under the mutex — a paused
+        // same-target resume takes the locked path below, so this can never
+        // race a stop()'s teardown with a play() call.
+        if (isSameTargetPlaying(itemId, episodeId)) return PlayResult.Ok
+        return commandMutex.withLock { playLocked(itemId, episodeId) }
+    }
+
+    /** True only when the target is active, loaded AND told to play — no writes. */
+    private suspend fun isSameTargetPlaying(itemId: String, episodeId: String?): Boolean {
+        if (!isSameTarget(PlaybackState.active.value, itemId, episodeId)) return false
+        return withContext(main) { player.mediaItemCount > 0 && player.playWhenReady }
+    }
+
+    /**
+     * The no-teardown short-circuit (user-reported on-device: one tap on the
+     * playing book broke playback — the full path opens a SECOND server session
+     * for the same book, hands off the healthy one mid-flight and replaces a
+     * queue that was fine). Same target = surface what's playing: resume if
+     * paused, change nothing else. The mediaItemCount check is what makes this
+     * safe against a stopped player: stop() clears the queue (PlaybackState
+     * only after), and an empty queue answers false so the caller runs the
+     * full play path rather than "resuming" nothing. Called with [commandMutex]
+     * HELD — the resume is a player mutation.
+     */
+    private suspend fun resumeIfSameTarget(itemId: String, episodeId: String?): Boolean {
+        if (!isSameTarget(PlaybackState.active.value, itemId, episodeId)) return false
+        return withContext(main) {
+            val loaded = player.mediaItemCount > 0
+            if (loaded && !player.playWhenReady) player.play()
+            loaded
+        }
+    }
+
+    private suspend fun playLocked(itemId: String, episodeId: String?): PlayResult {
+        // Re-checked under the lock: the play that was in flight while this one
+        // waited may have just made its target the active one.
+        if (resumeIfSameTarget(itemId, episodeId)) return PlayResult.Ok
 
         // Resolve BEFORE touching the outgoing session: a `/play` round trip can
         // take seconds, and closing the current book only to fail on the new one
@@ -275,7 +328,7 @@ class SessionManager(
     }
 
     /** Final sync + closeSession, then an empty player. Safe with nothing playing. */
-    suspend fun stop() {
+    suspend fun stop() = commandMutex.withLock {
         syncer.finish()
         withContext(main) {
             player.stop()
@@ -305,6 +358,17 @@ class SessionManager(
     }
 
     companion object {
+
+        /**
+         * Whether a play request names what is ALREADY the active session — the
+         * decision [play]'s no-teardown short-circuit rides on, pure so the
+         * blank-vs-null episode normalisation is a test row, not a field bug.
+         */
+        internal fun isSameTarget(active: ActiveSession?, itemId: String, episodeId: String?): Boolean {
+            if (active == null) return false
+            return active.itemId == itemId &&
+                active.episodeId == episodeId?.takeIf { it.isNotBlank() }
+        }
 
         /**
          * The whole local-vs-stream decision, with no player attached so it can

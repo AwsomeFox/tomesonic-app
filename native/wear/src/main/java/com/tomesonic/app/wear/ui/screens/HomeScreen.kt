@@ -1,5 +1,7 @@
 package com.tomesonic.app.wear.ui.screens
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -7,18 +9,25 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import com.tomesonic.app.wear.ui.HomeDownloadState
 import com.tomesonic.app.wear.ui.HomeRow
+import com.tomesonic.app.wear.ui.HomeSections
 import com.tomesonic.app.wear.ui.HomeViewModel
 import com.tomesonic.app.wear.ui.ResumeTarget
 import com.tomesonic.app.wear.ui.SearchLogic
@@ -31,6 +40,7 @@ import com.tomesonic.app.wear.ui.components.LinearProgress
 import com.tomesonic.app.wear.ui.components.Note
 import com.tomesonic.app.wear.ui.components.PlayGlyph
 import com.tomesonic.app.wear.ui.components.PodcastGlyph
+import com.tomesonic.app.wear.ui.components.RefreshGlyph
 import com.tomesonic.app.wear.ui.components.ScreenTitle
 import com.tomesonic.app.wear.ui.components.ScrollScreen
 import com.tomesonic.app.wear.ui.components.SearchGlyph
@@ -46,8 +56,9 @@ import com.tomesonic.app.wear.ui.components.coverModel
  *
  * Every row that names a book PLAYS it — this is a watch, and a screen that
  * costs two taps to hear anything has already lost to reaching for the phone.
- * The item screen is reachable from the library and from downloads, where
- * browsing is actually the point.
+ * Each row's TRAILING affordance is the exception (user-asked): it downloads
+ * the row's book (or episode) in place, and once something is in flight or on
+ * the watch it opens the item screen, where the real download states live.
  */
 @Composable
 fun HomeScreen(
@@ -55,7 +66,8 @@ fun HomeScreen(
     onOpenLibrary: (String) -> Unit,
     onOpenSearch: (String) -> Unit,
     onOpenDownloads: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenItem: (String) -> Unit
 ) {
     val viewModel: HomeViewModel = viewModel()
     val state by viewModel.state.collectAsState()
@@ -82,7 +94,13 @@ fun HomeScreen(
             when (val row = state.rows[index]) {
                 is HomeRow.Resume -> ResumeCard(
                     target = row.target,
-                    onClick = { onPlay(row.target.itemId, row.target.episodeId) }
+                    downloadState = HomeSections.downloadState(
+                        state.downloads, state.requestedDownloads,
+                        row.target.itemId, row.target.episodeId
+                    ),
+                    onClick = { onPlay(row.target.itemId, row.target.episodeId) },
+                    onDownload = { viewModel.download(row.target.itemId, row.target.episodeId) },
+                    onOpenItem = { onOpenItem(row.target.itemId) }
                 )
 
                 HomeRow.ContinueHeader -> SectionHeader("Continue Listening")
@@ -98,7 +116,17 @@ fun HomeScreen(
                         )
                     },
                     trailing = {
-                        PlayGlyph(tint = MaterialTheme.colorScheme.primary, dim = 14.dp)
+                        // The chip body plays; this is the row's second verb.
+                        // It replaced a decorative play triangle — tap-to-play
+                        // is already the whole chip.
+                        HomeDownloadButton(
+                            state = HomeSections.downloadState(
+                                state.downloads, state.requestedDownloads,
+                                row.item.id, row.item.episodeId
+                            ),
+                            onDownload = { viewModel.download(row.item.id, row.item.episodeId) },
+                            onOpenItem = { onOpenItem(row.item.id) }
+                        )
                     }
                 )
 
@@ -153,7 +181,13 @@ fun HomeScreen(
  * puts the top of a short list.
  */
 @Composable
-private fun ResumeCard(target: ResumeTarget, onClick: () -> Unit) {
+private fun ResumeCard(
+    target: ResumeTarget,
+    downloadState: HomeDownloadState,
+    onClick: () -> Unit,
+    onDownload: () -> Unit,
+    onOpenItem: () -> Unit
+) {
     TomeCard(onClick = onClick, background = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             CoverImage(
@@ -184,21 +218,24 @@ private fun ResumeCard(target: ResumeTarget, onClick: () -> Unit) {
             PlayGlyph(tint = MaterialTheme.colorScheme.primary, dim = 18.dp)
         }
         val percent = UiFormat.percent(target.progress)
-        if (percent != null || target.downloaded) {
-            Spacer(Modifier.height(8.dp))
+        run {
+            Spacer(Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (target.downloaded) {
+                // ResumeTarget.downloaded can be true off an ITEM-level entry
+                // while an episode resume's own entry is absent — both signals
+                // are shown when they disagree, because both are true.
+                if (target.downloaded && downloadState != HomeDownloadState.Downloaded) {
                     DownloadedGlyph(tint = MaterialTheme.colorScheme.primary, dim = 12.dp)
                     Spacer(Modifier.width(6.dp))
                 }
-                LinearProgress(
-                    fraction = (target.progress ?: 0.0).toFloat(),
-                    modifier = Modifier.weight(1f)
-                )
                 if (percent != null) {
+                    LinearProgress(
+                        fraction = (target.progress ?: 0.0).toFloat(),
+                        modifier = Modifier.weight(1f)
+                    )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         text = percent,
@@ -206,8 +243,66 @@ private fun ResumeCard(target: ResumeTarget, onClick: () -> Unit) {
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1
                     )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                Spacer(Modifier.width(6.dp))
+                HomeDownloadButton(
+                    state = downloadState,
+                    onDownload = onDownload,
+                    onOpenItem = onOpenItem
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The rows' second verb, in one glyph: not on the watch → download it (default
+ * constraints); requested or already here → open the item screen, where the
+ * real states (progress, force, delete) live. Its own clickable inside a
+ * clickable row — the inner target wins the tap, which is the entire point.
+ */
+@Composable
+private fun HomeDownloadButton(
+    state: HomeDownloadState,
+    onDownload: () -> Unit,
+    onOpenItem: () -> Unit
+) {
+    // An icon-only control is invisible to a screen reader without BOTH of
+    // these: contentDescription names the NODE (what this button is, per
+    // state), onClickLabel names the VERB its tap performs.
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .semantics {
+                contentDescription = when (state) {
+                    HomeDownloadState.None -> "Download"
+                    HomeDownloadState.Requested -> "Download in progress"
+                    HomeDownloadState.Downloaded -> "Downloaded"
                 }
             }
+            .clickable(
+                role = Role.Button,
+                onClickLabel = when (state) {
+                    HomeDownloadState.None -> "Download"
+                    HomeDownloadState.Requested -> "Open item"
+                    HomeDownloadState.Downloaded -> "Open item"
+                },
+                onClick = if (state == HomeDownloadState.None) onDownload else onOpenItem
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        when (state) {
+            HomeDownloadState.None ->
+                DownloadGlyph(tint = MaterialTheme.colorScheme.primary, dim = 16.dp)
+            // The refresh mark, not a checkmark: the entry doesn't exist yet and
+            // the worker may be waiting on charger + Wi-Fi.
+            HomeDownloadState.Requested ->
+                RefreshGlyph(tint = MaterialTheme.colorScheme.onSurfaceVariant, dim = 16.dp)
+            HomeDownloadState.Downloaded ->
+                DownloadedGlyph(tint = MaterialTheme.colorScheme.primary, dim = 16.dp)
         }
     }
 }

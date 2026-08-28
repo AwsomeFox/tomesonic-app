@@ -7,6 +7,26 @@
 // next drift. This is a verbatim extraction of the component's expressions —
 // behavior must be IDENTICAL to what PlayerBottomSheet computed inline.
 
+/**
+ * Height of the chapters/queue sheet's collapsed "Chapters & Up Next" handle.
+ * The sheet permanently peeks (PEEK_HANDLE_H + insetBottom) above the screen
+ * bottom while the player is expanded, so every "does the cascade fit"
+ * question in this module ends at the TOP of that peek — not at the safe-area
+ * bottom. Defined in this pure module so the layout math and the components
+ * (PlayerChaptersQueueSheet renders the handle, PlayerBottomSheet budgets
+ * padding under it) can never disagree about the number.
+ */
+export const PEEK_HANDLE_H = 54;
+
+/**
+ * Floor for the adaptive cover: on screens too short for the natural cover
+ * (near-square foldables, phones with 3-button nav), the cover shrinks until
+ * the cascade fits above the peek — but not below this, where the art turns
+ * into a thumbnail. Screens that can't fit even this keep their natural cover
+ * and fall back to scrolling (contentOverflows).
+ */
+export const MIN_ADAPTIVE_COVER = 220;
+
 export interface PlayerLayoutInput {
   /** Effective screen width in dp (the component's measured?.w ?? window.width). */
   screenWidth: number;
@@ -32,7 +52,11 @@ export interface PlayerLayout {
   PW: number;
   /** Content column left inset ((screenWidth - PW) / 2). */
   PX: number;
-  /** Expanded cover edge length. */
+  /**
+   * Expanded cover edge length. Natural size (column/height/tablet-capped),
+   * adaptively shrunk — never below MIN_ADAPTIVE_COVER — on screens where the
+   * natural size would push the bottom pill under the chapters sheet's peek.
+   */
   COVER_SIZE_EXP: number;
   /** Top bar (collapse/cast/overflow row) top Y. */
   TOP_BAR_Y: number;
@@ -92,7 +116,10 @@ export interface PlayerLayout {
 
   /** Height of the cover→pill block (sum of the deltas above). */
   CONTENT_BLOCK_H: number;
-  /** Vertical space available for the block below the top bar. */
+  /**
+   * Vertical space available for the cover→pill block: below the top bar and
+   * source-label rhythm, above the chapters sheet's permanent peek handle.
+   */
   availH: number;
   /** Tablet-only extra top margin that vertically centers the block. */
   extraTop: number;
@@ -136,7 +163,6 @@ export function computePlayerLayout({
   );
   const PW = Math.min(screenWidth, 480); // content column width
   const PX = (screenWidth - PW) / 2; // column left inset
-  const COVER_SIZE_EXP = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
   const TOP_BAR_Y = insetTop + 8;
   // In-flow vertical rhythm below the cover, expressed as the exact box each
   // section occupies (marginTop + height). The absolute-overlay Y cascade
@@ -163,14 +189,38 @@ export function computePlayerLayout({
   const TRANSPORT_H = 88;               // transport control row
   const TRANSPORT_TO_PILL = 12;         // transport → bottom pill gap
   const PILL_H = 56;                    // bottom pill (speed / sleep / bookmark)
-  // Height of the cover→pill block, used to vertically center it on tablets.
-  // Derived from the same deltas as the cascade so it stays book-bar-aware.
-  const CONTENT_BLOCK_H =
-    COVER_SIZE_EXP + COVER_TO_BARS + BOOK_BAR_BOX +
+  // Everything below the cover, summed. The cover is the block's one flexible
+  // box — this fixed remainder is what the adaptive sizing subtracts out.
+  const BELOW_COVER_H =
+    COVER_TO_BARS + BOOK_BAR_BOX +
     SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
     TRANSPORT_TO_PILL + PILL_H;
-  const availH = screenHeight - (TOP_BAR_Y + 56) - insetBottom - 20;
-  const extraTop = isTablet ? Math.max(0, (availH - CONTENT_BLOCK_H) / 2) : 0;
+  // Vertical space the cover→pill block may occupy: below the top bar and the
+  // source-label rhythm, above the chapters sheet's PERMANENT peek handle
+  // (PEEK_HANDLE_H above the bottom inset), with 8dp breathing room. Budgeting
+  // the peek here is the foldable fix: near-square screens used to park the
+  // transport/pill under the peeking sheet because every bound stopped at the
+  // safe-area bottom. This is also the tablet-centering denominator, so a
+  // centered block stays inside the same bounds the fit check uses.
+  const availH =
+    screenHeight - (TOP_BAR_Y + 56) -
+    (TOPBAR_TO_SOURCE + SOURCE_LABEL_H + SOURCE_TO_COVER) -
+    insetBottom - PEEK_HANDLE_H - 8;
+  // Natural cover (the old sizing), then the adaptive shrink: when the natural
+  // cover would push the pill under the peek but a cover >= MIN_ADAPTIVE_COVER
+  // makes everything fit, size the cover to exactly fill the room instead of
+  // turning scrolling on. Screens short enough to need a smaller-than-floor
+  // cover keep the natural size and scroll (the pre-existing fallback).
+  const naturalCover = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
+  const fittedCover = Math.floor(availH - BELOW_COVER_H);
+  const COVER_SIZE_EXP =
+    fittedCover >= MIN_ADAPTIVE_COVER ? Math.min(naturalCover, fittedCover) : naturalCover;
+  // Height of the cover→pill block, used to vertically center it on tablets.
+  // Derived from the same deltas as the cascade so it stays book-bar-aware.
+  const CONTENT_BLOCK_H = COVER_SIZE_EXP + BELOW_COVER_H;
+  // Floored so centering can never push a block that exactly fits half a dp
+  // past the fit boundary on fractionally-measured screens.
+  const extraTop = isTablet ? Math.max(0, Math.floor((availH - CONTENT_BLOCK_H) / 2)) : 0;
   const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + TOPBAR_TO_SOURCE + extraTop;
   const COVER_Y_EXP = SOURCE_LABEL_Y + SOURCE_LABEL_H + SOURCE_TO_COVER;
   // Top of the book bar row. When the book row is hidden this is where the
@@ -186,7 +236,8 @@ export function computePlayerLayout({
   // The full-player content uses a fixed absolute cascade inside a ScrollView
   // whose scrolling is normally OFF (so the drag-to-collapse gesture runs
   // cleanly). On short viewports (small phones) the cascade can run past the
-  // bottom of the screen and clip the bottom pill, which would then be
+  // bottom of the VISIBLE area — which ends at the chapters sheet's peek, not
+  // the screen edge — and clip the bottom pill, which would then be
   // unreachable. This estimate is geometry-only — fontScale is NOT an input
   // (rows cap their text at maxFontSizeMultiplier 1.3, and the component keeps
   // a measured-overflow fallback for anything the estimate can't see). Compare
@@ -194,7 +245,7 @@ export function computePlayerLayout({
   // scrolling ONLY when it can't fit, so nothing is ever cut off; the top drag
   // region still collapses the sheet.
   const contentBottomY = TRANSPORT_Y_EXP + TRANSPORT_H + TRANSPORT_TO_PILL + PILL_H;
-  const contentOverflows = contentBottomY + 8 > screenHeight - insetBottom;
+  const contentOverflows = contentBottomY + 8 > screenHeight - insetBottom - PEEK_HANDLE_H;
 
   return {
     isTablet,

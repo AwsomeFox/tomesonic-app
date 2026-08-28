@@ -145,10 +145,14 @@ class DownloadRepository(
      * episode discriminator so a podcast's book job and two of its episodes'
      * jobs are three jobs rather than one that keeps replacing itself.
      */
-    suspend fun enqueue(itemId: String, episodeId: String?, force: Boolean = false) {
-        if (!DownloadWorker.isSafeName(itemId)) return
+    suspend fun enqueue(itemId: String, episodeId: String?, force: Boolean = false): Boolean {
+        // Reports whether a request actually reached WorkManager — every
+        // failure here is SILENT by design (never throw into a tap handler),
+        // and a caller keeping "requested" UI state needs the difference
+        // between "queued" and "quietly refused" or that state sticks forever.
+        if (!DownloadWorker.isSafeName(itemId)) return false
         val entryId = DownloadEntry.entryId(itemId, episodeId)
-        if (!DownloadWorker.isSafeName(entryId)) return
+        if (!DownloadWorker.isSafeName(entryId)) return false
         val episode = episodeId?.takeIf { it.isNotBlank() }
         val input = if (episode == null) {
             workDataOf(DownloadWorker.KEY_ITEM_ID to itemId)
@@ -165,16 +169,18 @@ class DownloadRepository(
             .addTag(itemTag(entryId))
             .build()
         val policy = if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 workManager().enqueueUniqueWork(
                     DownloadWorker.uniqueWorkName(entryId),
                     policy,
                     request
                 )
+                true
             } catch (t: Throwable) {
                 // WorkManager unavailable (an uninitialised process). Nothing to
                 // roll back — no bytes and no index entry exist yet.
+                false
             }
         }
     }

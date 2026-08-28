@@ -48,6 +48,93 @@ class HomeSectionsTest {
     private fun library(id: String, mediaType: String = "book") =
         LibrarySummary(id = id, name = "Library $id", mediaType = mediaType)
 
+    private fun episodeEntry(itemId: String, episodeId: String) = DownloadEntry(
+        id = DownloadEntry.entryId(itemId, episodeId),
+        title = "Podcast $itemId",
+        author = null,
+        duration = 1_800.0,
+        coverPath = null,
+        tracks = emptyList(),
+        bytes = 4_096L,
+        libraryItemId = itemId,
+        episodeId = episodeId,
+        episodeTitle = "Episode $episodeId"
+    )
+
+    // ---- the download affordance's state table ------------------------------
+
+    @Test
+    fun aBookWithItsEntryOnTheWatchReadsDownloaded() {
+        assertEquals(
+            HomeDownloadState.Downloaded,
+            HomeSections.downloadState(listOf(entry("b")), emptySet(), "b", null)
+        )
+    }
+
+    @Test
+    fun aRequestedBookReadsRequestedUntilItsEntryExists() {
+        val key = HomeSections.downloadKey("b", null)
+        assertEquals(
+            HomeDownloadState.Requested,
+            HomeSections.downloadState(emptyList(), setOf(key), "b", null)
+        )
+        // The entry landing outranks the stale marker — no cleanup pass needed.
+        assertEquals(
+            HomeDownloadState.Downloaded,
+            HomeSections.downloadState(listOf(entry("b")), setOf(key), "b", null)
+        )
+    }
+
+    @Test
+    fun anUntouchedBookOffersTheDownload() {
+        assertEquals(
+            HomeDownloadState.None,
+            HomeSections.downloadState(emptyList(), emptySet(), "b", null)
+        )
+    }
+
+    @Test
+    fun aPodcastRowIsJudgedByItsEpisodeNotByTheItem() {
+        // An item-level entry (or another episode's) must not make THIS row's
+        // tap read as playable-offline — playback resolves by (item, episode).
+        val itemLevel = listOf(entry("p"))
+        val otherEpisode = listOf(episodeEntry("p", "ep-2"))
+        assertEquals(
+            HomeDownloadState.None,
+            HomeSections.downloadState(itemLevel, emptySet(), "p", "ep-1")
+        )
+        assertEquals(
+            HomeDownloadState.None,
+            HomeSections.downloadState(otherEpisode, emptySet(), "p", "ep-1")
+        )
+        assertEquals(
+            HomeDownloadState.Downloaded,
+            HomeSections.downloadState(listOf(episodeEntry("p", "ep-1")), emptySet(), "p", "ep-1")
+        )
+    }
+
+    @Test
+    fun aLandedDownloadsMarkerIsPrunedAndAPendingOnesSurvives() {
+        val landedBook = HomeSections.downloadKey("b", null)
+        val landedEpisode = HomeSections.downloadKey("p", "ep-1")
+        val stillPending = HomeSections.downloadKey("c", null)
+        val pruned = HomeSections.pruneRequested(
+            setOf(landedBook, landedEpisode, stillPending),
+            listOf(entry("b"), episodeEntry("p", "ep-1"))
+        )
+        // Only the marker with no entry yet remains: the landed ones must go,
+        // or deleting those downloads later would resurrect them as a false
+        // "Requested" — and the set would only ever grow.
+        assertEquals(setOf(stillPending), pruned)
+    }
+
+    @Test
+    fun episodeKeysNeverCollideWithTheirPodcastsBookKey() {
+        assertEquals("p", HomeSections.downloadKey("p", null))
+        assertEquals("p", HomeSections.downloadKey("p", ""))
+        assertTrue(HomeSections.downloadKey("p", "ep-1") != HomeSections.downloadKey("p", null))
+    }
+
     // ---- resume -------------------------------------------------------------
 
     @Test
