@@ -1,4 +1,4 @@
-const { withSettingsGradle } = require("@expo/config-plugins");
+const { withSettingsGradle, withGradleProperties } = require("@expo/config-plugins");
 
 // Keeps the native Android Automotive OS module (native/automotive) wired into
 // the Android build. The module deliberately sits OUTSIDE native/android, which
@@ -36,4 +36,26 @@ function withAutomotiveSettingsGradle(config) {
   });
 }
 
-module.exports = (config) => withAutomotiveSettingsGradle(config);
+// gradle.properties: the daemon heap. The template regenerates 2048m, which
+// D8 OOMed the first time the unscoped release jobs merged the THIRD module's
+// dex alongside the phone's (`:automotive:mergeDexRelease`, e2e-build). The
+// value is committed in android/gradle.properties AND re-asserted here so a
+// `--clean` prebuild can't quietly bring the OOM back.
+const JVM_ARGS = {
+  type: "property",
+  key: "org.gradle.jvmargs",
+  value: "-Xmx4096m -XX:MaxMetaspaceSize=512m",
+};
+
+function withAutomotiveGradleProperties(config) {
+  return withGradleProperties(config, (cfg) => {
+    cfg.modResults = cfg.modResults.filter(
+      (item) => !(item.type === "property" && item.key === JVM_ARGS.key)
+    );
+    cfg.modResults.push(JVM_ARGS);
+    return cfg;
+  });
+}
+
+module.exports = (config) =>
+  withAutomotiveGradleProperties(withAutomotiveSettingsGradle(config));
