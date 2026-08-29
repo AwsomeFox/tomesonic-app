@@ -186,6 +186,10 @@ jobs:
             -filter_complex "[0][1][2][3][4][5]concat=n=6:v=0:a=1[a]" -map "[a]" \
             -map_metadata 6 -map_chapters 6 -c:a aac book.m4b
           rm meta.txt
+          # Verify HERE, in this book's own directory — run 10 died because
+          # this probe sat after the Long Book block's cd and ran in the
+          # wrong cwd.
+          ffprobe -loglevel error -show_chapters book.m4b | grep -c "\[CHAPTER\]"
           # THE REPORTED BOOK'S SHAPE: one m4b, 102 chapters (the reporter's
           # failing book is a single 1.64GB m4b with 102 chapters — scaled to
           # 102 × 7s). The chapter-storm flow streams it first (the reporter's
@@ -210,7 +214,6 @@ jobs:
             -i longmeta.txt -map_metadata 1 -map_chapters 1 -c:a aac long.m4b
           rm longmeta.txt
           ffprobe -loglevel error -show_chapters long.m4b | grep -c "\[CHAPTER\]"
-          ffprobe -loglevel error -show_chapters book.m4b | grep -c CHAPTER
 
       - name: start + provision Audiobookshelf
         run: |
