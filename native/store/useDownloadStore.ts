@@ -410,6 +410,17 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         // fail-open: can't stat ≠ known-missing
       }
     }
+    // The stat loop AWAITED — the entry may have moved while it ran. A cancel
+    // during validation removed it, and committing this stale snapshot would
+    // resurrect the discarded download — as "completed" while cancel's
+    // deferred folder-delete (which checks activeDownloads) razes its files,
+    // or as a ghost "failed" row that makes that same check SKIP the delete
+    // and orphan the partials. A cancel + immediate re-download REPLACED the
+    // object, and committing would clobber the new run's ledger (or complete
+    // it from this stale one). Every writer swaps in a new object, so
+    // identity means "same run, untouched" — anything else, this completion
+    // is moot.
+    if (get().activeDownloads[id] !== item) return;
     if (invalidPartIds.length > 0) {
       // UN-COMPLETE the invalid parts before failing: retry/resume re-fetches
       // exactly `!p.completed` parts, so a demotion that left every part
@@ -541,6 +552,11 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         return pt;
       })
     );
+    // The sweep AWAITED — bail if the completed entry moved while it ran
+    // (the user removed the download from the Downloads screen, or a fresh
+    // run replaced the row): writing this stale snapshot would resurrect a
+    // record whose files removeDownload just deleted.
+    if (get().completedDownloads[id] !== item) return;
     const finalParts = anyInvalid
       ? sweptParts
       : sweptParts.map(pt =>

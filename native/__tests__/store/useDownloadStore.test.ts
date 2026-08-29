@@ -261,9 +261,81 @@ describe("useDownloadStore", () => {
       await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
       expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
     });
+
+    it("bails when the download is cancelled while validation is in flight", async () => {
+      // The stat loop awaits; a cancel landing inside that window removes the
+      // active entry. Committing the pre-await snapshot anyway would
+      // resurrect the cancelled download as "completed" — right as cancel's
+      // deferred folder-delete razes its files.
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ activeDownloads: {} }); // cancel landed mid-stat
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+    });
+
+    it("does not clobber a replacement run that started while validation was in flight", async () => {
+      // Cancel + immediate re-download swaps a fresh item in under the same
+      // id during the stat window. The stale completion must leave the new
+      // run's ledger exactly as it found it.
+      const replacement = baseItem({ status: "downloading" });
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ activeDownloads: { item1: replacement } });
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["item1"]).toBe(replacement);
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+    });
   });
 
   describe("markDownloadBroken", () => {
+    it("bails when the download is removed while the stat sweep is in flight", async () => {
+      // removeDownload during the sweep deletes the completed entry, its DB
+      // rows, and its folder. Writing the stale snapshot afterwards would
+      // resurrect a ghost "failed" row for a download that no longer exists.
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ completedDownloads: {} }); // removeDownload landed mid-sweep
+        return { exists: false } as any;
+      });
+      const done = baseItem({
+        status: "completed",
+        progress: 1,
+        parts: [
+          { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+        ],
+      });
+      useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+    });
+
     it("demotes a completed download to a retryable failure and retracts the offline mapping", async () => {
       const done = baseItem({ status: "completed", progress: 1 });
       useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
