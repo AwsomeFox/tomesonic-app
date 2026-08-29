@@ -19,10 +19,27 @@
 #      but PAUSED at the boundary: reproduced).
 appId: com.tomesonic.app
 ---
-- launchApp
+# stopApp: false — a bare launchApp KILLS the app, and if an earlier flow
+# aborted mid-playback, Android's media resumption RESTARTS the dead session
+# after the kill (run 12: the storm book auto-resumed and this flow's Play
+# tap hit its miniplayer instead of the item page).
+- launchApp:
+    stopApp: false
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
+# Abort-safety: stop whatever an aborted earlier flow left playing; the
+# optional steps sail through when nothing is.
+- runFlow:
+    when:
+      visible: "Expand player.*"
+    commands:
+      - tapOn: "Expand player.*"
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
 
 # ---- Download the chapter-queue book -------------------------------------
 - tapOn:
