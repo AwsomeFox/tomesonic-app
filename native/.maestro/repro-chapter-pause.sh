@@ -43,18 +43,32 @@ maestro test .maestro/repro/chapter-pause.yaml || rc=$?
 
 if [ "$rc" -eq 0 ]; then
   echo "########## dimension 2: boundary crossed under doze ##########"
-  maestro test .maestro/repro/doze-boundary.yaml -e PHASE=start || rc=$?
+  maestro test .maestro/repro/doze-boundary-start.yaml || rc=$?
   if [ "$rc" -eq 0 ]; then
     echo "== entering doze across the 25s chapter boundary =="
     adb shell dumpsys battery unplug || true      # deviceidle refuses while "charging"
     adb shell input keyevent KEYCODE_SLEEP || true # screen off, like a pocketed phone
-    adb shell dumpsys deviceidle force-idle
-    sleep 30
-    adb shell dumpsys deviceidle unforce
-    adb shell dumpsys battery reset || true
-    adb shell input keyevent KEYCODE_WAKEUP
-    echo "== exited doze =="
-    maestro test .maestro/repro/doze-boundary.yaml -e PHASE=assert || rc=$?
+    # deviceidle ships DISABLED on this emulator image: run 5's force-idle
+    # answered "Unable to go deep idle; not enabled" — and because dumpsys
+    # exits 0 even when it refuses, the leg green-passed without ever idling
+    # (the uncaptured-failure hole Copilot flagged). Enable first, force, and
+    # gate on the STATE READBACK — the only signal dumpsys can't fake.
+    adb shell dumpsys deviceidle enable all || true
+    adb shell dumpsys deviceidle force-idle || true
+    deep=$(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')
+    echo "deviceidle deep state after force-idle: $deep"
+    if [ "$deep" != "IDLE" ]; then
+      echo "::error::doze sandwich never reached deep idle (state: $deep) — refusing to let the doze leg no-op-pass"
+      rc=1
+    else
+      sleep 30
+      adb shell dumpsys deviceidle unforce || true
+      echo "deviceidle deep state after unforce: $(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')"
+      adb shell dumpsys battery reset || true
+      adb shell input keyevent KEYCODE_WAKEUP
+      echo "== exited doze =="
+      maestro test .maestro/repro/doze-boundary-assert.yaml || rc=$?
+    fi
   fi
 fi
 

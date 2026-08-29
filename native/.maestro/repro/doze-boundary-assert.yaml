@@ -1,0 +1,23 @@
+# REPRO, dimension 2, phase 2: the wake-side judgment. Runs after the runner
+# verified the device actually reached deep idle (deviceidle get deep == IDLE)
+# and slept ~30s across the 25s chapter boundary from ~Chapter1+5s.
+#
+# A boundary pause shows "Chapter 1 of 3" forever (never crossed) or "Play"
+# over Chapter 2 (crossed, then paused) — either goes red here.
+#
+# See doze-boundary-start.yaml for why the two phases are separate files.
+appId: com.tomesonic.app
+---
+# Warm relaunch just brings the app forward; the session must have survived
+# doze on its own.
+- launchApp
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: "Chapter 2 of 3"
+    timeout: 15000
+- assertVisible: "Pause"

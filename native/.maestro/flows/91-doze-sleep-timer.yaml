@@ -16,8 +16,9 @@ env:
   # Which shelf card to open — CI pins the seeded audiobook so the seeded
   # EBOOK (also "<title> by <author>") can't be picked up instead.
   BOOK: ".* by .*"
-  # arm | assert — set by ci-doze.sh; defaults to arm so a bare run is sensible.
-  PHASE: arm
+  # arm | assert — ALWAYS injected by ci-doze.sh (-e PHASE=…). No default on
+  # purpose: current Maestro applies env DEFAULTS over CLI -e overrides (see
+  # 90-doze-playback.yaml) — a defaulted PHASE pinned every invocation to arm.
 ---
 # ---- PHASE=arm : start playback and arm the shortest sleep timer ----
 - runFlow:

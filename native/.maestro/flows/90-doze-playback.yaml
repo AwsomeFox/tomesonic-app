@@ -14,9 +14,11 @@ env:
   # Which shelf card to open — CI pins the seeded audiobook so the seeded
   # EBOOK (also "<title> by <author>") can't be picked up instead.
   BOOK: ".* by .*"
-  # start | assert — set by ci-doze.sh; defaults to the start phase so a bare
-  # `maestro test 90-doze-playback.yaml` still does something sensible.
-  PHASE: start
+  # start | assert — ALWAYS injected by ci-doze.sh (-e PHASE=…). No default
+  # on purpose: current Maestro applies a flow's env DEFAULTS over CLI -e
+  # overrides, so a defaulted PHASE pinned every invocation to the start
+  # phase and the assert leg silently re-ran it (proven in the chapter-pause
+  # repro rig, run 5). A bare local run must pass -e PHASE explicitly.
 ---
 # ---- PHASE=start : begin a real playback session (identical to 20-playback) ----
 - runFlow:

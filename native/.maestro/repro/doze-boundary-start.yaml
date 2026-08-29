@@ -1,0 +1,43 @@
+# REPRO, dimension 2, phase 1: pin the downloaded m4b to the top of
+# Chapter 1, playing. The runner then force-idles the emulator across the 25s
+# chapter boundary and runs doze-boundary-assert.yaml.
+#
+# TWO FILES, deliberately not one PHASE-switched file: current Maestro applies
+# a flow's `env:` DEFAULTS over CLI `-e` overrides (proven in run 5 — the
+# `-e PHASE=assert` invocation re-ran the start phase), so a defaulted
+# selector variable is a silent no-op switch. Separate files can't misroute.
+#
+# The foreground legs (chapter-pause.yaml) run first and leave this book
+# stopped/finished — the chapters-sheet jump makes the starting position
+# deterministic regardless.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: "The Chapter Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Deterministic anchor: jump to Chapter 1's top regardless of what the
+# earlier legs left as this book's saved position / finished flag.
+- tapOn: "Chapters and Up Next"
+- extendedWaitUntil:
+    visible: "Chapter 1, starts at .*"
+    timeout: 5000
+- tapOn: "Chapter 1, starts at .*"
+- extendedWaitUntil:
+    visible: "Chapter 1 of 3"
+    timeout: 10000
+# Playing, not paused, when the screen goes dark.
+- assertVisible: "Pause"
