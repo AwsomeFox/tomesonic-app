@@ -1,9 +1,15 @@
 # REPRO, dimension 2, phase 2: the wake-side judgment. Runs after the runner
-# verified the device actually reached deep idle (deviceidle get deep == IDLE)
-# and slept ~30s across the 25s chapter boundary from ~Chapter1+5s.
+# verified the device actually reached deep idle (deviceidle get deep ==
+# IDLE) and slept 15s across the downloaded 102-chapter book's 12s
+# boundaries (~2 crossings at the app-global 1.5x).
 #
-# A boundary pause shows "Chapter 1 of 3" forever (never crossed) or "Play"
-# over Chapter 2 (crossed, then paused) — either goes red here.
+# The invariant is playback SURVIVED the idled crossings: the session is
+# live with the transport still playing. A boundary halt flips the
+# transport to "Play" (or kills the caption) — either goes red here — and
+# the runner's STOPPED-fingerprint gate on the POS sampler catches the
+# same halt deterministically; the sampler's timeline is the record of the
+# crossings themselves (run 7/16 style). No pinned chapter numbers: run 18
+# retired the 75s fixture whose end raced the assert at 1.5x.
 #
 # See doze-boundary-start.yaml for why the two phases are separate files.
 appId: com.tomesonic.app
@@ -20,10 +26,7 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 20000
-# Timing-proof invariant: a boundary was crossed AND playback is still
-# running. Pinning a single chapter made the assert a stopwatch (the sandwich
-# overhead put run 7 in chapter 3, not 2).
 - extendedWaitUntil:
-    visible: "Chapter [23] of 3"
+    visible: "Chapter \\d+ of 102"
     timeout: 15000
 - assertVisible: "Pause"

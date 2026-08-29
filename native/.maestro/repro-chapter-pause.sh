@@ -35,8 +35,10 @@ cd "$(dirname "$0")/.." # native/
 set -e
 adb install android/app/build/outputs/apk/release/app-release.apk
 
+# Login THROUGH the toxiproxy relay (13379 -> abs:80): transparent at full
+# speed until the throttle leg turns its toxics on.
 maestro test .maestro/flows/10-login.yaml \
-  -e SERVER_URL=http://10.0.2.2:13378 -e ABS_USER=root -e ABS_PASS=testpass
+  -e SERVER_URL=http://10.0.2.2:13379 -e ABS_USER=root -e ABS_PASS=testpass
 
 # Match the reporting user's REAL settings: skip silence OFF (they confirmed
 # it off and still failing — run 9 tested the on-state), voice boost ON.
@@ -77,49 +79,39 @@ echo "########## dimension 0.5: streamed boundaries over a SLOW server #########
 # chapter transition cold-opens the HTTP source (each clipped item is its
 # own ProgressiveMediaSource, no shared cache) and the fixture — like most
 # real m4b rips — keeps moov at the END of the file, so a transition costs
-# several round trips before audio. Shape the emulated network so those
-# trips take real time (~500kbps, 0.5-0.8s delay ≈ a strained cellular
-# link to a home server), and gate on the console READBACK like the doze
-# IDLE gate — a refused emulator-console command must not no-op-pass.
-adb emu network speed 500:500 || true
-adb emu network delay 500:800 || true
-netstat=$(adb emu network status 2>/dev/null | tr -d '\r')
-echo "$netstat"
-if ! echo "$netstat" | grep -qi "speed"; then
-  echo "::error::emulator console refused network shaping — the throttle leg cannot run honestly"
-  rc=1
-else
+# several round trips before audio. Run 18 proved `adb emu network` never
+# shapes the 10.0.2.2 loopback path (8.0s transitions and 2.7s cold seeks
+# under a supposed 62KB/s+0.65s link), so the slowness is server-side now:
+# latency+bandwidth toxics on the toxiproxy relay the app is logged in
+# through. The gate MEASURES a proxied request — a shaping that doesn't
+# demonstrably bite must not no-op-pass.
+docker exec toxiproxy /toxiproxy-cli toxic add -n slow_lat -t latency \
+  -a latency=600 -a jitter=200 --downstream abs_slow || true
+docker exec toxiproxy /toxiproxy-cli toxic add -n slow_bw -t bandwidth \
+  -a rate=64 --downstream abs_slow || true
+t=$(curl -o /dev/null -s -w '%{time_total}' --max-time 20 http://localhost:13379/status || echo 0)
+echo "proxied /status with toxics on: ${t}s"
+if awk -v t="$t" 'BEGIN{exit !(t >= 0.5)}'; then
   maestro test .maestro/repro/chapter-throttle.yaml || rc=$?
+else
+  echo "::error::toxics did not measurably slow the proxied request (${t}s) — the throttle leg cannot run honestly"
+  rc=1
 fi
-# Restore the link whatever happened — dimensions 1-2 download and must
-# not inherit the throttle.
-adb emu network speed full || true
-adb emu network delay none || true
-echo "network restored: $(adb emu network status 2>/dev/null | tr -d '\r' | head -4)"
+# Toxics off whatever happened — the later dimensions download through the
+# same relay and must get it at full speed.
+docker exec toxiproxy /toxiproxy-cli toxic remove -n slow_lat abs_slow || true
+docker exec toxiproxy /toxiproxy-cli toxic remove -n slow_bw abs_slow || true
+echo "toxics removed; proxied /status: $(curl -o /dev/null -s -w '%{time_total}' --max-time 20 http://localhost:13379/status || echo '?')s"
 
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?
 
-# STOPPED-FINGERPRINT GATE (deterministic natural-crossing verdict): the
-# session pushes NONE on a proper stop-and-close and PAUSED on a pause
-# (run 15's timeline), so a STOPPED sample during dimensions 0-1 means the
-# player halted at an item end — the reported symptom, or an unplanned
-# queue end (run 14's oversized storm). Momentary Maestro asserts raced
-# these windows (a failing extendedWaitUntil can give up 2.5s into a 15s
-# timeout); this grep cannot. Scoped to dims 0-1: the doze dimension's
-# fixture legitimately plays out after its assert phase.
-if grep -q "state=STOPPED" "$POS_LOG"; then
-  echo "::error::STOPPED sample during dimensions 0-1 — playback halted at an item boundary:"
-  grep "state=STOPPED" "$POS_LOG" | head -5
-  rc=1
-fi
-: > "$POS_LOG"
 
 if [ "$rc" -eq 0 ]; then
   echo "########## dimension 2: boundary crossed under doze ##########"
   maestro test .maestro/repro/doze-boundary-start.yaml || rc=$?
   if [ "$rc" -eq 0 ]; then
-    echo "== entering doze across the 25s chapter boundary =="
+    echo "== entering doze across the 12s chapter boundaries =="
     adb shell dumpsys battery unplug || true      # deviceidle refuses while "charging"
     adb shell input keyevent KEYCODE_SLEEP || true # screen off, like a pocketed phone
     # deviceidle ships DISABLED on this emulator image: run 5's force-idle
@@ -135,11 +127,12 @@ if [ "$rc" -eq 0 ]; then
       echo "::error::doze sandwich never reached deep idle (state: $deep) — refusing to let the doze leg no-op-pass"
       rc=1
     else
-      # 15s, not 30: the storm leg set 1.5x and playback speed is app-global,
-      # so this book's 30s-wall chapters play in ~20s — a 30s window from
-      # ~ChapterStart+10s could overrun the whole 75s book and stop playback
-      # LEGITIMATELY at its end, reading as a false red. 15s still crosses
-      # the first boundary with margin on both sides.
+      # The doze book is the 102-chapter Long Book now (run 18: the 75s
+      # Chapter Book at the app-global 1.5x ran out DURING the assert phase
+      # — a race run 16 happened to win). Its 12s chapters play in ~8s at
+      # 1.5x, so this window crosses ~2 boundaries while idled, and the
+      # book's end is minutes away from any resume point the earlier legs
+      # can leave.
       sleep 15
       adb shell dumpsys deviceidle unforce || true
       echo "deviceidle deep state after unforce: $(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')"
@@ -149,6 +142,21 @@ if [ "$rc" -eq 0 ]; then
       maestro test .maestro/repro/doze-boundary-assert.yaml || rc=$?
     fi
   fi
+fi
+
+# STOPPED-FINGERPRINT GATE (deterministic halted-at-boundary verdict): the
+# session pushes NONE on a proper stop-and-close and PAUSED on a pause
+# (run 15's timeline), so a STOPPED sample anywhere in the pipeline means
+# the player halted at an item end — the reported symptom, or an unplanned
+# queue end. Momentary Maestro asserts raced these windows (a failing
+# extendedWaitUntil can give up 2.5s into a 15s timeout); this grep
+# cannot. Covers everything now that the doze dimension runs on the
+# 102-chapter book and can never legitimately reach its end (run 18: the
+# 75s Chapter Book at the app-global 1.5x ran out mid-doze-assert).
+if grep -q "state=STOPPED" "$POS_LOG"; then
+  echo "::error::STOPPED sample during the pipeline — playback halted at an item boundary:"
+  grep "state=STOPPED" "$POS_LOG" | head -5
+  rc=1
 fi
 
 kill "$SAMPLER_PID" 2>/dev/null || true

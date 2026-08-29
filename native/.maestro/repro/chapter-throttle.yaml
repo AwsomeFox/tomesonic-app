@@ -12,12 +12,16 @@
 # the end of each chapter" — and a seek landing on a slow open is the
 # natural "won't play again until killing the app" candidate.
 #
-# The runner shapes the emulated network (~500kbps, ~0.5-0.8s delay)
-# before this flow and restores it after. "The Slow Book" is reserved for
-# this leg: never downloaded, never touched by the storm legs, so the
-# play below always streams cold. 1.5x and voice boost are already
-# app-global from the storm leg. Timeouts are throttle-sized: a boundary
-# costs ~8s of playback plus potentially ~10s of round trips.
+# The slowness is SERVER-SIDE: the app is logged in through a toxiproxy
+# relay, and the runner turns latency (600ms±200) and bandwidth (64KB/s)
+# toxics on around this flow only — run 18 proved `adb emu network` never
+# shapes the 10.0.2.2 loopback path (8.0s transitions and 2.7s cold seeks
+# under a supposed 62KB/s+0.65s link), and the runner now gates on a TIMED
+# proxied request instead of a settings readback. "The Slow Book" is
+# reserved for this leg: never downloaded, never touched by the storm
+# legs, so the play below always streams cold. 1.5x and voice boost are
+# already app-global from the storm leg. Timeouts are throttle-sized: a
+# boundary costs ~8s of playback plus potentially ~10s of round trips.
 appId: com.tomesonic.app
 ---
 - launchApp:

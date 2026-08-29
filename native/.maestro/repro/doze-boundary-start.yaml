@@ -1,20 +1,25 @@
-# REPRO, dimension 2, phase 1: pin the downloaded m4b to the top of
-# Chapter 1, playing. The runner then force-idles the emulator across the 25s
-# chapter boundary and runs doze-boundary-assert.yaml.
+# REPRO, dimension 2, phase 1: put the DOWNLOADED 102-chapter m4b in a
+# playing state. The runner then force-idles the emulator across its 12s
+# chapter boundaries (~8s wall at the app-global 1.5x) and runs
+# doze-boundary-assert.yaml.
 #
-# TWO FILES, deliberately not one PHASE-switched file: current Maestro applies
-# a flow's `env:` DEFAULTS over CLI `-e` overrides (proven in run 5 — the
-# `-e PHASE=assert` invocation re-ran the start phase), so a defaulted
-# selector variable is a silent no-op switch. Separate files can't misroute.
+# The Long Book replaced the 75s Chapter Book here after run 18: at 1.5x
+# the small book's whole content lasts 50s of wall time, and the doze
+# sandwich plus assert-launch overhead runs ~50s from the chapter-1 pin —
+# run 16 won that race by ~2s, run 18 lost it by ~2s (the last chapter
+# played out and pushed STOPPED five seconds before the Pause assert). On
+# the 102-chapter book the end is minutes away from any resume point the
+# earlier legs can leave, so no pin is needed: the flow just requires the
+# session live and PLAYING before the screen goes dark, and the POS
+# sampler plus the runner's STOPPED-fingerprint gate judge the crossings
+# made while idled.
 #
-# The foreground legs (chapter-pause.yaml) run first and leave this book
-# stopped/finished — the chapters-sheet jump makes the starting position
-# deterministic regardless.
+# TWO FILES, deliberately not one PHASE-switched file: current Maestro
+# applies a flow's `env:` DEFAULTS over CLI `-e` overrides (proven in run
+# 5), so a defaulted selector variable is a silent no-op switch. Separate
+# files can't misroute.
 appId: com.tomesonic.app
 ---
-# stopApp: false + abort-safety preamble — see chapter-pause.yaml: a killed
-# app resurrects its session via Android media resumption, and a leftover
-# live session steals the bare Play tap below.
 - launchApp:
     stopApp: false
 - extendedWaitUntil:
@@ -49,13 +54,11 @@ appId: com.tomesonic.app
           visible: "Stop and close player"
           timeout: 5000
       - tapOn: "Stop and close player"
-# With stopApp:false no flow starts from a known screen — a predecessor (or
-# the preamble's stop-and-close) leaves the app on an ITEM PAGE, where no
-# library row exists (run 14). Pop back toward Home if the target book
-# isn't visible; launchApp re-foregrounds if back ran on Home's root.
+# Pop toward Home when the target book isn't visible — dimension 1 leaves
+# the app on The Test Book's item page.
 - runFlow:
     when:
-      notVisible: "The Chapter Book by .*"
+      notVisible: "The Long Book by .*"
     commands:
       - back
       - launchApp:
@@ -63,13 +66,18 @@ appId: com.tomesonic.app
       - extendedWaitUntil:
           visible: "Home"
           timeout: 10000
-
+- scrollUntilVisible:
+    element:
+      text: "The Long Book by .*"
+    direction: DOWN
+    timeout: 20000
 - tapOn:
-    text: "The Chapter Book by .*"
+    text: "The Long Book by .*"
     index: 0
 - extendedWaitUntil:
     visible: ".*(Play|Continue).*"
     timeout: 15000
+# Downloaded by the storm leg — this resumes the LOCAL copy, somewhere deep.
 - tapOn: "^(Play|Continue)$"
 - tapOn:
     text: "Expand player.*"
@@ -77,15 +85,8 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 30000
-# Deterministic anchor: jump to Chapter 1's top regardless of what the
-# earlier legs left as this book's saved position / finished flag.
-- tapOn: "Chapters and Up Next"
 - extendedWaitUntil:
-    visible: "Chapter 1, starts at .*"
-    timeout: 5000
-- tapOn: "Chapter 1, starts at .*"
-- extendedWaitUntil:
-    visible: "Chapter 1 of 3"
-    timeout: 10000
+    visible: "Chapter \\d+ of 102"
+    timeout: 15000
 # Playing, not paused, when the screen goes dark.
 - assertVisible: "Pause"
