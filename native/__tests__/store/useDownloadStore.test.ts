@@ -179,6 +179,12 @@ describe("useDownloadStore", () => {
       expect(s.completedDownloads["item1"]).toBeUndefined();
       expect(s.activeDownloads["item1"].status).toBe("failed");
       expect(s.activeDownloads["item1"].error).toMatch(/incomplete/i);
+      // The invalid part is UN-COMPLETED so retry actually re-fetches it —
+      // retry/resume picks `!p.completed` parts, so leaving it completed
+      // made the retry affordance a no-op that re-failed validation forever.
+      const part = s.activeDownloads["item1"].parts.find(pt => pt.id === "track_0")!;
+      expect(part.completed).toBe(false);
+      expect(part.bytesDownloaded).toBe(0);
     });
 
     it("refuses to mark complete when a track file exists but is empty", async () => {
@@ -233,24 +239,29 @@ describe("useDownloadStore", () => {
   });
 
   describe("markDownloadBroken", () => {
-    it("demotes a completed download to a retryable failure and retracts the offline mapping", () => {
+    it("demotes a completed download to a retryable failure and retracts the offline mapping", async () => {
       const done = baseItem({ status: "completed", progress: 1 });
       useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
       db.saveLocalLibraryItem({ id: "item1", libraryItemId: "item1", isDownloaded: true });
 
-      useDownloadStore.getState().markDownloadBroken("item1", "Downloaded copy incomplete — tap retry to re-download");
+      await useDownloadStore.getState().markDownloadBroken("item1", "Downloaded copy incomplete — tap retry to re-download");
 
       const s = useDownloadStore.getState();
       expect(s.completedDownloads["item1"]).toBeUndefined();
       expect(s.activeDownloads["item1"].status).toBe("failed");
       expect(s.activeDownloads["item1"].error).toMatch(/incomplete/i);
-      // Parts preserved so retry resumes rather than restarting.
+      // Parts preserved so retry resumes rather than restarting — and every
+      // broken/unverifiable track part is UN-COMPLETED so retry re-fetches
+      // it (retry picks `!p.completed` parts).
       expect(s.activeDownloads["item1"].parts.length).toBeGreaterThan(0);
+      for (const pt of s.activeDownloads["item1"].parts) {
+        if (pt.id.startsWith("track_")) expect(pt.completed).toBe(false);
+      }
       // The offline library stops vouching for files that are not there.
       expect(db.getLocalLibraryItem("item1")).toBeFalsy();
     });
 
-    it("retracts the mapping by the DOWNLOAD id, not libraryItemId (episode composite keys)", () => {
+    it("retracts the mapping by the DOWNLOAD id, not libraryItemId (episode composite keys)", async () => {
       // Episode downloads key by `${libraryItemId}::${episodeId}` — the offline
       // row is saved under that composite id, and removing by bare
       // libraryItemId would leave the stale isDownloaded claim standing.
@@ -264,19 +275,19 @@ describe("useDownloadStore", () => {
       db.saveLocalLibraryItem({ id: "book1::ep1", libraryItemId: "book1", isDownloaded: true });
       db.saveLocalLibraryItem({ id: "book1", libraryItemId: "book1", isDownloaded: true });
 
-      useDownloadStore.getState().markDownloadBroken("book1::ep1", "broken");
+      await useDownloadStore.getState().markDownloadBroken("book1::ep1", "broken");
 
       expect(db.getLocalLibraryItem("book1::ep1")).toBeFalsy();
       // The sibling BOOK row (different download) is untouched.
       expect(db.getLocalLibraryItem("book1")).toBeTruthy();
     });
 
-    it("falls through to failDownload for an item that is only active", () => {
+    it("falls through to failDownload for an item that is only active", async () => {
       useDownloadStore.setState({
         activeDownloads: { item1: baseItem({ status: "downloading" }) },
         completedDownloads: {},
       });
-      useDownloadStore.getState().markDownloadBroken("item1", "broken");
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
       expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("failed");
     });
   });

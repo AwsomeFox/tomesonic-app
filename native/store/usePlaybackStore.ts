@@ -2755,15 +2755,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const { useDownloadStore } = require("./useDownloadStore");
           useDownloadStore
             .getState()
-            .markDownloadBroken(download.id, "Downloaded copy incomplete — tap retry to re-download");
-        } catch {}
+            .markDownloadBroken(download.id, "Downloaded copy incomplete — tap retry to re-download")
+            .catch((e: any) => console.warn("[Playback] markDownloadBroken failed", e));
+        } catch (e) {
+          console.warn("[Playback] markDownloadBroken unavailable", e);
+        }
         try {
           const { useSnackbarStore } = require("./useSnackbarStore");
           useSnackbarStore.getState().show({
             message: "Downloaded copy incomplete — streaming this book instead",
             durationMs: 6000,
           });
-        } catch {}
+        } catch (e) {
+          console.warn("[Playback] snackbar unavailable", e);
+        }
       }
 
       // Resolve the resume position BEFORE touching the player.
