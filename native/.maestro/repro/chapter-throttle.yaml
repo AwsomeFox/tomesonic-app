@@ -67,6 +67,14 @@ appId: com.tomesonic.app
           timeout: 10000
 
 # ---- Streamed at 1.5x over the throttled link -----------------------------
+# Four books no longer fit one screen: run 17's Home showed the other three
+# while The Slow Book sat below the fold. Nothing is playing here, so the
+# scroll can't be yanked (unlike the run-13 chapters sheet).
+- scrollUntilVisible:
+    element:
+      text: "The Slow Book by .*"
+    direction: DOWN
+    timeout: 20000
 - tapOn:
     text: "The Slow Book by .*"
     index: 0
