@@ -88,6 +88,16 @@ function folderForItem(item?: DownloadItem | null): string | null {
 }
 
 /**
+ * Join a folder path and filename, tolerating legacy persisted folder paths
+ * that lack the trailing slash (the same defense ensureLocalCover uses) — a
+ * bare concatenation would stat ".../item1track_0.mp3" and falsely demote a
+ * perfectly valid download.
+ */
+function joinFolderFile(folder: string, filename: string): string {
+  return folder.endsWith("/") ? `${folder}${filename}` : `${folder}/${filename}`;
+}
+
+/**
  * The download namespace for the CURRENT account: `${serverAddress}::${userId}`.
  * Prefers the durable lastSessionKey (it survives a forced 401 logout, so a
  * later re-login re-adopts the SAME namespace and its files); falls back to
@@ -387,7 +397,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     const invalidPartIds: string[] = [];
     for (const part of trackParts) {
       const raw =
-        part.localFilePath || (localFolderPath ? `${localFolderPath}${part.filename}` : null);
+        part.localFilePath || (localFolderPath ? joinFolderFile(localFolderPath, part.filename) : null);
       if (!raw) continue;
       const path = raw.startsWith("file://") ? raw : `file://${raw}`;
       try {
@@ -497,7 +507,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     const sweptParts = await Promise.all(
       (item.parts || []).map(async pt => {
         if (!String(pt?.id || "").startsWith("track_") || !pt.completed) return pt;
-        const raw = pt.localFilePath || (folder ? `${folder}${pt.filename}` : null);
+        const raw = pt.localFilePath || (folder ? joinFolderFile(folder, pt.filename) : null);
         if (!raw) {
           anyInvalid = true;
           return { ...pt, completed: false, bytesDownloaded: 0 };

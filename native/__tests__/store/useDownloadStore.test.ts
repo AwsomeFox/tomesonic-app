@@ -219,6 +219,31 @@ describe("useDownloadStore", () => {
       expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
     });
 
+    it("joins legacy slashless folder paths correctly instead of falsely demoting", async () => {
+      // Legacy rows persist localFolderPath without the trailing slash; a
+      // bare concatenation would stat ".../item1track_0.m4b" (missing), and
+      // the demotion would un-complete a perfectly valid download.
+      const statted: string[] = [];
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async (p: any) => {
+        statted.push(String(p));
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            localFolderPath: "file:///downloads/item1", // no trailing slash
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1");
+      expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
+      expect(statted).toContain("file:///downloads/item1/a.m4b");
+    });
+
     it("stays fail-open when the stat itself throws", async () => {
       // A transient fs hiccup must not brick a good download — only a
       // definitive exists:false / size 0 fails validation.
