@@ -117,8 +117,13 @@ if awk -v t="$t" 'BEGIN{exit !(t >= 0.4)}'; then
     # manual Play in the assert flow must bring playback back.
     maestro test .maestro/repro/throttle-flap-start.yaml || rc=$?
     if [ "$rc" -eq 0 ]; then
-      echo "== flap A: 40s blackhole (ladder's last rung lands after restore) =="
-      docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t timeout \
+      # reset_peer, NOT timeout=0: run 22's blackhole held every strangled
+      # connection open forever and the pile-up wedged toxiproxy itself (its
+      # API answered HTML, the data path died, and dimension 1 starved on a
+      # dead proxy). Resets kill each connection instantly — no fd pile-up,
+      # and closer to a dying home-server link anyway.
+      echo "== flap A: 40s of connection resets (recovery must land after restore) =="
+      docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t reset_peer \
         -a timeout=0 --downstream abs_slow || true
       sleep 40
       docker exec toxiproxy /toxiproxy-cli toxic remove -n flap abs_slow || true
@@ -130,10 +135,13 @@ if awk -v t="$t" 'BEGIN{exit !(t >= 0.4)}'; then
         echo "::error::playback did NOT self-recover after a 40s flap the retry ladder should survive"
         rc=1
       else
-        echo "== flap B: 100s blackhole (outlasts every retry rung) =="
-        docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t timeout \
+        # 150s: run 22 showed ~50s of buffered+cached runway before the
+        # player even notices the flap — a wedge-hunt must outlast runway
+        # AND the whole retry cycle, not just the rung schedule.
+        echo "== flap B: 150s of connection resets (outlasts runway + every retry rung) =="
+        docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t reset_peer \
           -a timeout=0 --downstream abs_slow || true
-        sleep 100
+        sleep 150
         docker exec toxiproxy /toxiproxy-cli toxic remove -n flap abs_slow || true
         maestro test .maestro/repro/throttle-flap-assert.yaml || rc=$?
       fi
@@ -147,7 +155,24 @@ fi
 # same relay and must get it at full speed.
 docker exec toxiproxy /toxiproxy-cli toxic remove -n slow_lat abs_slow || true
 docker exec toxiproxy /toxiproxy-cli toxic remove -n slow_bw abs_slow || true
-echo "toxics removed; proxied /status: $(curl -o /dev/null -s -w '%{time_total}' --max-time 20 http://localhost:13379/status || echo '?')s"
+# HEALTH GATE with a restart fallback: run 22's wedged proxy silently
+# starved every later dimension. A fast proxied /status proves the relay
+# is live; anything else gets one container restart + proxy re-create.
+ht=$(curl -o /dev/null -s -w '%{time_total}' --max-time 10 http://localhost:13379/status || echo 99)
+echo "proxied /status after toxic removal: ${ht}s"
+if ! awk -v t="$ht" 'BEGIN{exit !(t < 2)}'; then
+  echo "toxiproxy unhealthy — restarting the relay"
+  docker restart toxiproxy || true
+  sleep 3
+  ABS_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' abs)
+  docker exec toxiproxy /toxiproxy-cli create -l 0.0.0.0:13379 -u "$ABS_IP:80" abs_slow || true
+  ht=$(curl -o /dev/null -s -w '%{time_total}' --max-time 10 http://localhost:13379/status || echo 99)
+  echo "proxied /status after restart: ${ht}s"
+  if ! awk -v t="$ht" 'BEGIN{exit !(t < 2)}'; then
+    echo "::error::toxiproxy relay unrecoverable — later dimensions would starve on a dead server path"
+    rc=1
+  fi
+fi
 
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?
