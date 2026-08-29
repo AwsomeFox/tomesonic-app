@@ -1,7 +1,6 @@
 # REPRO, dimension 0 — the REPORTED BOOK'S SHAPE: one m4b, 102 chapters
 # ("This Inevitable Ruin": single 1.64GB m4b, 102 chapters, 28h — scaled to
-# 102 × 12s so boundaries arrive every ~8s at 1.5× without racing the taps,
-# which is how run 12's 7s chapters broke the flow). Two legs:
+# 102 × 12s so boundaries arrive every ~8s at 1.5×). Two legs:
 #
 #   1. STREAMED: the reporting user's own failing case — their download had
 #      silently failed, so the clipped queue ran over the HTTP source. Every
@@ -11,6 +10,21 @@
 # Both at 1.5× with voice boost ON (set by enable-voice-boost.yaml) — the
 # user's real conditions. Caption asserts are PROGRESSION-shaped (regex
 # floors, not exact chapters) so they can't go stale between taps.
+#
+# Run 13 verdict on this leg so far: 20 consecutive STREAMED transitions at
+# exactly 8.00s apart (POS sampler), captions in lockstep — then the flow
+# died in the chapters sheet: scrollUntilVisible "Chapter 60" managed ~8 rows
+# in 30s because PlayerChaptersQueueSheet re-fires scrollToIndex(current-2)
+# on every currentChapterIndex change, yanking the list back at each 8s
+# boundary. The deep jump therefore no longer uses the sheet at all: a SKIP
+# STORM of "Next chapter" taps (the same seekToChapter path the sheet rows
+# call, and the path AVRCP next-track presses hit on Bluetooth — the
+# reporter's real transport) drives deep into the queue, doubling as a
+# rapid-seek stress against the reported "won't play again until killing the
+# app" wedge. The natural-crossing proof afterwards needs no exact chapter:
+# the "Chapter position" slider's a11y value counts elapsed WITHIN the
+# chapter, so seeing a mid-chapter reading and then a low one again proves a
+# boundary was crossed by playback itself, whatever its number.
 appId: com.tomesonic.app
 ---
 - launchApp:
@@ -18,11 +32,29 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
-# Abort-safety: a flow that died mid-playback leaves a live session — and if
-# its abort killed the app, Android's media resumption can RESTART it (run
-# 12: the storm book auto-resumed and the next leg's Play tap hit ITS
-# miniplayer). Stop whatever is playing; optional steps sail through when
-# nothing is.
+# Abort-safety, three states (run 13 proved the miniplayer-only version
+# insufficient — the app can resume ON the full player, chapters sheet open,
+# where "Expand player.*" doesn't exist and the bare "Home" text still
+# matches). Order matters: dismiss the sheet, then stop from the full
+# player, then the miniplayer case; optional steps sail through when
+# nothing is playing.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
 - runFlow:
     when:
       visible: "Expand player.*"
@@ -68,20 +100,28 @@ appId: com.tomesonic.app
     visible: "Chapter \\d\\d of 102"
     timeout: 90000
 - assertVisible: "Pause"
-# Deep-queue jump: transitions late in a 102-item queue behave like early ones?
-- tapOn: "Chapters and Up Next"
-- scrollUntilVisible:
-    element:
-      text: "Chapter 60, starts at .*"
-    direction: DOWN
-    timeout: 30000
-- tapOn: "Chapter 60, starts at .*"
+# SKIP STORM: 45 rapid seekToChapter(+1)s through the clipped queue. From
+# chapter ≥10 this lands ≥40 even if a few taps read the same active index
+# and coalesce; nextChapter() no-ops at the queue end, so overshoot is safe.
+- repeat:
+    times: 45
+    commands:
+      - tapOn: "Next chapter"
+# Deep in the queue AND still playing after the storm.
 - extendedWaitUntil:
-    visible: "Chapter 6[01] of 102"
+    visible: "Chapter [4-9]\\d of 102"
+    timeout: 10000
+- assertVisible: "Pause"
+# Natural-crossing proof: anchor mid-chapter (elapsed 5-9s of the 12s
+# chapter), then require a low reading again — only playback itself crossing
+# a boundary can wrap the counter, no taps are happening. 8s wall per
+# chapter at 1.5x, so 15s timeouts cover any phase.
+- extendedWaitUntil:
+    visible: "Chapter position, 0:0[5-9] elapsed.*"
     timeout: 15000
 - extendedWaitUntil:
-    visible: "Chapter 6[2-9] of 102"
-    timeout: 45000
+    visible: "Chapter position, 0:0[0-3] elapsed.*"
+    timeout: 15000
 - assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"
@@ -112,21 +152,26 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 30000
-# Resumes around the leg-1 position. Jump deeper and cross there — well
-# clear of the book end so auto-finish can't muddy the verdict.
-- tapOn: "Chapters and Up Next"
-- scrollUntilVisible:
-    element:
-      text: "Chapter 80, starts at .*"
-    direction: DOWN
-    timeout: 30000
-- tapOn: "Chapter 80, starts at .*"
 - extendedWaitUntil:
-    visible: "Chapter 8[01] of 102"
+    visible: "Chapter \\d+ of 102"
+    timeout: 15000
+# Resumes around where leg 1 stopped (~ch55-65). A shorter storm keeps the
+# landing well clear of chapter 102, where end-of-book auto-finish could
+# legitimately stop playback and read as a false red.
+- repeat:
+    times: 15
+    commands:
+      - tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter ([5-9]\\d|10[0-2]) of 102"
+    timeout: 10000
+- assertVisible: "Pause"
+- extendedWaitUntil:
+    visible: "Chapter position, 0:0[5-9] elapsed.*"
     timeout: 15000
 - extendedWaitUntil:
-    visible: "Chapter 8[2-9] of 102"
-    timeout: 45000
+    visible: "Chapter position, 0:0[0-3] elapsed.*"
+    timeout: 15000
 - assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"

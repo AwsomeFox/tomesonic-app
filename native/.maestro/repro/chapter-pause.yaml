@@ -28,8 +28,29 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
-# Abort-safety: stop whatever an aborted earlier flow left playing; the
-# optional steps sail through when nothing is.
+# Abort-safety, three states (run 13: the storm died with the chapters
+# sheet OPEN over the full player, "Expand player.*" never matched, and this
+# flow then hunted for its book on a screen that wasn't Home — the bare
+# "Home" text assert above matches even there). Dismiss the sheet, stop from
+# the full player, then the miniplayer case; all sail through when nothing
+# is playing.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
 - runFlow:
     when:
       visible: "Expand player.*"

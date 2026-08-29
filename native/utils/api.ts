@@ -239,8 +239,10 @@ api.interceptors.response.use(
         appLogger.info("Attempting token refresh...", "API");
         let response: any = null;
         let definitiveError: any = null;
-        // A candidate that was never actually HEARD by the server — timeout,
-        // connection reset, a proxy 5xx — may be the LIVE token: after the
+        // A candidate that was never DEFINITIVELY REJECTED — a timeout or
+        // connection reset (no answer at all) or a 5xx (an answer, but some
+        // proxy or server fault, not a verdict on the token) — may be the
+        // LIVE token: after the
         // native Android Auto service rotates the pair, auto_creds holds the
         // only valid refresh token while the stored one is already dead. Under
         // poor reception the fresh candidate's POST can vanish into the void

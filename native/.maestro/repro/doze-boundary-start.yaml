@@ -20,6 +20,25 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
+# Three-state teardown (see chapter-pause.yaml): sheet open → full player →
+# miniplayer; a predecessor can die in any of them.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
 - runFlow:
     when:
       visible: "Expand player.*"
