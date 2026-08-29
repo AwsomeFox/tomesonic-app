@@ -206,6 +206,16 @@ jobs:
             -H "Authorization: Bearer $TOKEN" | jq '[.media.chapters[]?] | length')
           echo "The Chapter Book parsed chapters: $CH"
           [ "$CH" -ge 3 ]
+          # EVIDENCE, not an assert: print what ABS derived for the two-file
+          # book. Runs 1-2 failed the "Chapter 1 of 2" caption on exactly this
+          # book — whether the server session even CARRIES chapters decides
+          # fixture-bug vs app-bug before reading a single app log.
+          TB=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r '.results[] | select(.media.metadata.title=="The Test Book") | .id')
+          echo "The Test Book chapters as ABS serves them:"
+          curl -sf "http://localhost:13378/api/items/$TB" \
+            -H "Authorization: Bearer $TOKEN" | jq '.media.chapters'
 
       - name: install Maestro
         run: curl -Ls https://get.maestro.mobile.dev | bash
