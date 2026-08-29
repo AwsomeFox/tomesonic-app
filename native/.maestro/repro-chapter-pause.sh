@@ -6,15 +6,21 @@
 # Deliberately NOT part of ci-flows.sh: this is a diagnostic rig dispatched
 # by hand while the bug is being pinned down, not a gate.
 #
-# Two dimensions, in order:
-#   1. chapter-pause.yaml   — FOREGROUND boundary crossings, both queue
-#                             shapes, downloaded. Green since run 4; kept as
-#                             the regression floor for the rig itself.
-#   2. doze-boundary.yaml   — a boundary crossed while force-idled (the real
-#                             listening condition), downloaded m4b. Maestro
-#                             can't adb, so the doze sandwich lives here
-#                             between the flow's start/assert phases
-#                             (ci-doze.sh's pattern).
+# Dimensions, in order:
+#   0.  chapter-storm.yaml    — the reported book's shape (102-chapter m4b),
+#                               streamed then downloaded, 1.5x + voice boost,
+#                               skip storms. Green as of run 16.
+#   0.5 chapter-throttle.yaml — the same shape STREAMED over a shaped slow
+#                               link (adb emu network), cold source opens at
+#                               every boundary. The unifying suspect: the
+#                               reporter was unknowingly streaming.
+#   1.  chapter-pause.yaml    — FOREGROUND boundary crossings, both queue
+#                               shapes, downloaded. Green since run 4; the
+#                               rig's regression floor.
+#   2.  doze-boundary-*.yaml  — a boundary crossed while force-idled (the
+#                               real listening condition), downloaded m4b.
+#                               Maestro can't adb, so the doze sandwich
+#                               lives here (ci-doze.sh's pattern).
 #
 # EVIDENCE GOES TO STDOUT, not artifacts: the action kills the emulator the
 # moment this script exits non-zero (a post-step logcat reads an empty
@@ -65,6 +71,31 @@ SAMPLER_PID=$!
 
 echo "########## dimension 0: the reported book's shape (102-chapter m4b) ##########"
 maestro test .maestro/repro/chapter-storm.yaml || rc=$?
+
+echo "########## dimension 0.5: streamed boundaries over a SLOW server ##########"
+# The reported case is a big m4b streamed from a remote server. Every
+# chapter transition cold-opens the HTTP source (each clipped item is its
+# own ProgressiveMediaSource, no shared cache) and the fixture — like most
+# real m4b rips — keeps moov at the END of the file, so a transition costs
+# several round trips before audio. Shape the emulated network so those
+# trips take real time (~500kbps, 0.5-0.8s delay ≈ a strained cellular
+# link to a home server), and gate on the console READBACK like the doze
+# IDLE gate — a refused emulator-console command must not no-op-pass.
+adb emu network speed 500:500 || true
+adb emu network delay 500:800 || true
+netstat=$(adb emu network status 2>/dev/null | tr -d '\r')
+echo "$netstat"
+if ! echo "$netstat" | grep -qi "speed"; then
+  echo "::error::emulator console refused network shaping — the throttle leg cannot run honestly"
+  rc=1
+else
+  maestro test .maestro/repro/chapter-throttle.yaml || rc=$?
+fi
+# Restore the link whatever happened — dimensions 1-2 download and must
+# not inherit the throttle.
+adb emu network speed full || true
+adb emu network delay none || true
+echo "network restored: $(adb emu network status 2>/dev/null | tr -d '\r' | head -4)"
 
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?

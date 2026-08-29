@@ -216,6 +216,17 @@ jobs:
             -i longmeta.txt -map_metadata 1 -map_chapters 1 -c:a aac long.m4b
           rm longmeta.txt
           ffprobe -loglevel error -show_chapters long.m4b | grep -c "\[CHAPTER\]"
+          # The Slow Book: an identical 102-chapter m4b under its own title,
+          # reserved for the throttled-streaming dimension — it must NEVER be
+          # downloaded, and the storm legs must never touch it, so the
+          # throttle leg always streams cold. Remux copy (instant, chapters
+          # carry over); moov stays at the END (no +faststart) like most
+          # real m4b rips, so every cold open pays the tail-seek round trips.
+          mkdir -p "$GITHUB_WORKSPACE/e2e-media/Test Author/The Slow Book"
+          cd "$GITHUB_WORKSPACE/e2e-media/Test Author/The Slow Book"
+          ffmpeg -loglevel error -i "../The Long Book/long.m4b" -c copy \
+            -metadata title="The Slow Book" -metadata album="The Slow Book" slow.m4b
+          ffprobe -loglevel error -show_chapters slow.m4b | grep -c "\[CHAPTER\]"
 
       - name: start + provision Audiobookshelf
         run: |
@@ -238,14 +249,14 @@ jobs:
             | jq -r '.id')
           curl -sf -X POST "http://localhost:13378/api/libraries/$LIB/scan" \
             -H "Authorization: Bearer $TOKEN" || true
-          # ALL THREE books must surface before the flow runs.
+          # ALL FOUR books must surface before the flow runs.
           for i in $(seq 1 60); do
             COUNT=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
               -H "Authorization: Bearer $TOKEN" | jq -r '.total // 0')
-            [ "$COUNT" -ge 3 ] && break; sleep 2
+            [ "$COUNT" -ge 4 ] && break; sleep 2
           done
           echo "library items: $COUNT"
-          [ "$COUNT" -ge 3 ]
+          [ "$COUNT" -ge 4 ]
           # The storm book is the point of the run — 102 parsed chapters or bust.
           LB=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
             -H "Authorization: Bearer $TOKEN" \
@@ -254,6 +265,13 @@ jobs:
             -H "Authorization: Bearer $TOKEN" | jq '[.media.chapters[]?] | length')
           echo "The Long Book parsed chapters: $LC"
           [ "$LC" -ge 102 ]
+          SB=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r '.results[] | select(.media.metadata.title=="The Slow Book") | .id')
+          SC=$(curl -sf "http://localhost:13378/api/items/$SB" \
+            -H "Authorization: Bearer $TOKEN" | jq '[.media.chapters[]?] | length')
+          echo "The Slow Book parsed chapters: $SC"
+          [ "$SC" -ge 102 ]
           # The repro is meaningless if ABS didn't parse the embedded
           # chapters — fail the seed loudly instead of green-passing a
           # chapterless single-file book (which builds a ONE-item queue with

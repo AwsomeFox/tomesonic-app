@@ -1,0 +1,121 @@
+# REPRO, dimension 0.5 — streamed chapter boundaries over a SLOW SERVER.
+#
+# The unifying hypothesis after run 16's full green: the reporter's book
+# was STREAMING (their download had silently failed — and other "downloaded"
+# reporters may be in the same state without knowing). A streamed chapter
+# transition cold-opens the remote m4b every time: each clipped queue item
+# is its own ProgressiveMediaSource with no shared cache, and m4b rips
+# (ours included — no +faststart) keep moov at the END of the file, so a
+# transition costs several HTTP round trips before any audio. On a fast
+# local link (runs 13-16) that's invisible; on a strained link every
+# chapter end becomes seconds of silence — heard as "playback paused at
+# the end of each chapter" — and a seek landing on a slow open is the
+# natural "won't play again until killing the app" candidate.
+#
+# The runner shapes the emulated network (~500kbps, ~0.5-0.8s delay)
+# before this flow and restores it after. "The Slow Book" is reserved for
+# this leg: never downloaded, never touched by the storm legs, so the
+# play below always streams cold. 1.5x and voice boost are already
+# app-global from the storm leg. Timeouts are throttle-sized: a boundary
+# costs ~8s of playback plus potentially ~10s of round trips.
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Abort-safety, three states — see chapter-pause.yaml.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
+- runFlow:
+    when:
+      visible: "Expand player.*"
+    commands:
+      - tapOn: "Expand player.*"
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+# Pop toward Home when the target book isn't visible (the storm leg's
+# teardown leaves the app on The Long Book's item page).
+- runFlow:
+    when:
+      notVisible: "The Slow Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+
+# ---- Streamed at 1.5x over the throttled link -----------------------------
+- tapOn:
+    text: "The Slow Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 20000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+# Cold open under throttle: session POST + first moov fetch can take a
+# while before the player even shows.
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 102"
+    timeout: 60000
+- assertVisible: "Pause"
+# Two NATURAL boundary crossings over the slow link. A transition that
+# stalls forever (never re-opens the source, never resumes) freezes the
+# caption — either floor times out and the run captures the wedge under
+# the sampler. Floors exclude chapter 1 / earlier floors' ceilings so they
+# can only be satisfied by advancing.
+- extendedWaitUntil:
+    visible: "Chapter [2-9] of 102"
+    timeout: 90000
+- assertVisible: "Pause"
+- extendedWaitUntil:
+    visible: "Chapter [3-9] of 102"
+    timeout: 90000
+- assertVisible: "Pause"
+# Seek-while-slow: next-chapter presses landing on cold opens — the wedge
+# candidate for "won't play again until killing the app".
+- repeat:
+    times: 5
+    commands:
+      - tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter \\d\\d of 102"
+    timeout: 180000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000
