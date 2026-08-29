@@ -11,20 +11,29 @@
 # user's real conditions. Caption asserts are PROGRESSION-shaped (regex
 # floors, not exact chapters) so they can't go stale between taps.
 #
-# Run 13 verdict on this leg so far: 20 consecutive STREAMED transitions at
-# exactly 8.00s apart (POS sampler), captions in lockstep — then the flow
-# died in the chapters sheet: scrollUntilVisible "Chapter 60" managed ~8 rows
-# in 30s because PlayerChaptersQueueSheet re-fires scrollToIndex(current-2)
-# on every currentChapterIndex change, yanking the list back at each 8s
-# boundary. The deep jump therefore no longer uses the sheet at all: a SKIP
-# STORM of "Next chapter" taps (the same seekToChapter path the sheet rows
-# call, and the path AVRCP next-track presses hit on Bluetooth — the
-# reporter's real transport) drives deep into the queue, doubling as a
-# rapid-seek stress against the reported "won't play again until killing the
-# app" wedge. The natural-crossing proof afterwards needs no exact chapter:
-# the "Chapter position" slider's a11y value counts elapsed WITHIN the
-# chapter, so seeing a mid-chapter reading and then a low one again proves a
-# boundary was crossed by playback itself, whatever its number.
+# Run 13: 20 consecutive STREAMED transitions at exactly 8.00s apart (POS
+# sampler), captions in lockstep — and the chapters-sheet deep jump is
+# unwinnable while playing (PlayerChaptersQueueSheet re-fires
+# scrollToIndex(current-2) on every chapter change, yanking the list back
+# each 8s boundary). The deep jump is a SKIP STORM instead: repeated "Next
+# chapter" taps — the same seekToChapter path the sheet rows call, and the
+# AVRCP next path the reporter's Bluetooth transport hits. The
+# natural-crossing proof needs no exact chapter: the "Chapter position"
+# slider's a11y value counts elapsed WITHIN the chapter, so a mid-chapter
+# reading followed by a low one again proves playback itself crossed a
+# boundary.
+#
+# Run 14 sized the storms wrong and paid for it: Maestro paces each tap by a
+# UI-settle wait (~8s here, because the slider/caption update keeps the UI
+# "busy"), so every tap also buys one NATURAL 8s crossing — a 45-tap storm
+# consumed ~90 chapters, leg 1 ended near chapter 99, and leg 2's storm ran
+# the queue OFF THE END: item id=101 (chapter 102) played out and the player
+# went STOPPED at its clip end. That STOPPED was the END OF THE BOOK, not
+# the reported bug. Storm sizes are now budgeted at taps×2 (tap + concurrent
+# natural) against the 102-chapter fixture, and both legs' floor asserts
+# exclude the 100s so an end-of-book state can never satisfy them. Leg 1's
+# 45-tap+naturals interleave DID pass everything streamed — deep skips and
+# natural crossings both clean.
 appId: com.tomesonic.app
 ---
 - launchApp:
@@ -66,6 +75,23 @@ appId: com.tomesonic.app
           timeout: 5000
       - tapOn: "Stop and close player"
 
+# With stopApp:false no flow starts from a known screen: a predecessor's
+# teardown (or the preamble's stop-and-close) leaves the app on an ITEM PAGE
+# (run 14's dimension-1 hierarchy: "Play" + "View chapters" — The Long
+# Book's page, where no library row exists). If the target book isn't
+# visible, pop back toward Home; the launchApp re-foregrounds the app in
+# case back was pressed on Home's root and backgrounded it.
+- runFlow:
+    when:
+      notVisible: "The Long Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+
 # ---- Leg 1: STREAMED at 1.5x ---------------------------------------------
 - tapOn:
     text: "The Long Book by .*"
@@ -100,16 +126,17 @@ appId: com.tomesonic.app
     visible: "Chapter \\d\\d of 102"
     timeout: 90000
 - assertVisible: "Pause"
-# SKIP STORM: 45 rapid seekToChapter(+1)s through the clipped queue. From
-# chapter ≥10 this lands ≥40 even if a few taps read the same active index
-# and coalesce; nextChapter() no-ops at the queue end, so overshoot is safe.
+# SKIP STORM: 20 seekToChapter(+1) taps. Budget ~x2 in chapters (each ~8s
+# tap also buys one natural crossing): from ~ch10-15 this lands ~ch45-60,
+# leaving leg 2 a deep resume point with room below chapter 102.
 - repeat:
-    times: 45
+    times: 20
     commands:
       - tapOn: "Next chapter"
-# Deep in the queue AND still playing after the storm.
+# Deep in the queue AND still playing after the storm. 30-69 only — an
+# end-of-book state (chapter 100+) must never satisfy this.
 - extendedWaitUntil:
-    visible: "Chapter [4-9]\\d of 102"
+    visible: "Chapter [3-6]\\d of 102"
     timeout: 10000
 - assertVisible: "Pause"
 # Natural-crossing proof: anchor mid-chapter (elapsed 5-9s of the 12s
@@ -155,15 +182,25 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Chapter \\d+ of 102"
     timeout: 15000
-# Resumes around where leg 1 stopped (~ch55-65). A shorter storm keeps the
-# landing well clear of chapter 102, where end-of-book auto-finish could
-# legitimately stop playback and read as a false red.
+# DOWNLOADED natural boundary at depth, before any storm touches it — the
+# purest match for "downloaded books pause at the end of each chapter".
+- extendedWaitUntil:
+    visible: "Chapter position, 0:0[5-9] elapsed.*"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Chapter position, 0:0[0-3] elapsed.*"
+    timeout: 15000
+- assertVisible: "Pause"
+# Short storm: resumes ~ch45-60 after leg 1; 10 taps ≈ +20 chapters lands
+# ~ch65-80, well clear of 102. Floor excludes the 100s so an end-of-book
+# state can never satisfy it (run 14's 10[0-2] alternative matched the
+# legitimately-ended chapter 102).
 - repeat:
-    times: 15
+    times: 10
     commands:
       - tapOn: "Next chapter"
 - extendedWaitUntil:
-    visible: "Chapter ([5-9]\\d|10[0-2]) of 102"
+    visible: "Chapter [6-9]\\d of 102"
     timeout: 10000
 - assertVisible: "Pause"
 - extendedWaitUntil:

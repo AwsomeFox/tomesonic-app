@@ -36,7 +36,10 @@ maestro test .maestro/flows/10-login.yaml \
 # it off and still failing — run 9 tested the on-state), voice boost ON.
 maestro test .maestro/repro/enable-voice-boost.yaml
 
-# Clean slate so the dump below holds ONLY the repro window.
+# Clean slate so the dump below holds ONLY the repro window — and a buffer
+# big enough to actually hold it: the default 256K ring wrapped over run
+# 14's 30 minutes and evicted the very moment the run existed to capture.
+adb logcat -G 16M || true
 adb logcat -c || true
 set +e
 

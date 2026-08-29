@@ -49,6 +49,21 @@ appId: com.tomesonic.app
           visible: "Stop and close player"
           timeout: 5000
       - tapOn: "Stop and close player"
+# With stopApp:false no flow starts from a known screen — a predecessor (or
+# the preamble's stop-and-close) leaves the app on an ITEM PAGE, where no
+# library row exists (run 14). Pop back toward Home if the target book
+# isn't visible; launchApp re-foregrounds if back ran on Home's root.
+- runFlow:
+    when:
+      notVisible: "The Chapter Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+
 - tapOn:
     text: "The Chapter Book by .*"
     index: 0
