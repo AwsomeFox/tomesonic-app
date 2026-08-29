@@ -86,12 +86,15 @@ echo "########## dimension 0.5: streamed boundaries over a SLOW server #########
 # through. The gate MEASURES a proxied request — a shaping that doesn't
 # demonstrably bite must not no-op-pass.
 docker exec toxiproxy /toxiproxy-cli toxic add -n slow_lat -t latency \
-  -a latency=600 -a jitter=200 --downstream abs_slow || true
+  -a latency=800 -a jitter=200 --downstream abs_slow || true
 docker exec toxiproxy /toxiproxy-cli toxic add -n slow_bw -t bandwidth \
   -a rate=64 --downstream abs_slow || true
 t=$(curl -o /dev/null -s -w '%{time_total}' --max-time 20 http://localhost:13379/status || echo 0)
 echo "proxied /status with toxics on: ${t}s"
-if awk -v t="$t" 'BEGIN{exit !(t >= 0.5)}'; then
+# Threshold sits BELOW the toxic's jitter floor (800-200=600ms): run 19's
+# gate demanded 0.5s against a 600±200 toxic and a 0.492s draw killed an
+# honestly-shaped leg by 8ms.
+if awk -v t="$t" 'BEGIN{exit !(t >= 0.4)}'; then
   maestro test .maestro/repro/chapter-throttle.yaml || rc=$?
 else
   echo "::error::toxics did not measurably slow the proxied request (${t}s) — the throttle leg cannot run honestly"

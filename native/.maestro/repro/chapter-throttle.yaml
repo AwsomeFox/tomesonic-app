@@ -13,7 +13,7 @@
 # natural "won't play again until killing the app" candidate.
 #
 # The slowness is SERVER-SIDE: the app is logged in through a toxiproxy
-# relay, and the runner turns latency (600ms±200) and bandwidth (64KB/s)
+# relay, and the runner turns latency (800ms±200) and bandwidth (64KB/s)
 # toxics on around this flow only — run 18 proved `adb emu network` never
 # shapes the 10.0.2.2 loopback path (8.0s transitions and 2.7s cold seeks
 # under a supposed 62KB/s+0.65s link), and the runner now gates on a TIMED
