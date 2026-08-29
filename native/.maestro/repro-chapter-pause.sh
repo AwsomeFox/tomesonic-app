@@ -114,7 +114,7 @@ if [ -n "$latest" ]; then
   # instead of dumping whole trees.
   find "$latest" -path '*screen-hierarchy/*.json' -print | while read -r h; do
     echo "---------- caption region of: $h ----------"
-    grep -oE '"(text|accessibilityText)":"[^"]{0,120}"' "$h" \
+    grep -oE '"(text|accessibilityText)"[[:space:]]*:[[:space:]]*"[^"]{0,120}"' "$h" \
       | grep -iE "chapter|pause|play|of [0-9]" | sort -u | head -30
   done
 fi

@@ -8,16 +8,22 @@
 # See doze-boundary-start.yaml for why the two phases are separate files.
 appId: com.tomesonic.app
 ---
-# Warm relaunch just brings the app forward; the session must have survived
-# doze on its own.
-- launchApp
+# Bring the app forward WITHOUT killing it: Maestro's launchApp stops the
+# target app by default, and run 7's sampler caught exactly that — playback
+# had crossed both boundaries ON SCHEDULE through verified deep idle, then
+# died 4s after this phase launched, at the harness's own hand.
+- launchApp:
+    stopApp: false
 - tapOn:
     text: "Expand player.*"
     optional: true
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 20000
+# Timing-proof invariant: a boundary was crossed AND playback is still
+# running. Pinning a single chapter made the assert a stopwatch (the sandwich
+# overhead put run 7 in chapter 3, not 2).
 - extendedWaitUntil:
-    visible: "Chapter 2 of 3"
+    visible: "Chapter [23] of 3"
     timeout: 15000
 - assertVisible: "Pause"
