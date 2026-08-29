@@ -87,8 +87,16 @@ echo "########## dimension 0.5: streamed boundaries over a SLOW server #########
 # demonstrably bite must not no-op-pass.
 docker exec toxiproxy /toxiproxy-cli toxic add -n slow_lat -t latency \
   -a latency=800 -a jitter=200 --downstream abs_slow || true
+# rate=24, down from 64: run 20 sat exactly AT the preload break-even —
+# the next clipped item costs ~510KB (tail moov ~400KB + 12s clip ~110KB)
+# per 8s chapter window, and 64KB/s delivered it just in time, so natural
+# boundaries stayed at a clean 8.0s while cold seeks paid 4-6s and the
+# initial open 37s. At 24KB/s the preload needs ~21s per 8s window and
+# CANNOT keep up, so every natural boundary must audibly stall (~13s) —
+# the report, verbatim — while steady-state audio (74kbps x 1.5 =
+# 13.9KB/s) still fits.
 docker exec toxiproxy /toxiproxy-cli toxic add -n slow_bw -t bandwidth \
-  -a rate=64 --downstream abs_slow || true
+  -a rate=24 --downstream abs_slow || true
 t=$(curl -o /dev/null -s -w '%{time_total}' --max-time 20 http://localhost:13379/status || echo 0)
 echo "proxied /status with toxics on: ${t}s"
 # Threshold sits BELOW the toxic's jitter floor (800-200=600ms): run 19's
