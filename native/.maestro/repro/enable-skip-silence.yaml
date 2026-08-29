@@ -1,0 +1,28 @@
+# Turn ON the "Skip silence" setting before the repro flows run. This is the
+# widespread-condition hypothesis: skip-silence routes audio through media3's
+# SilenceSkippingAudioProcessor, which androidx/media #1352 documents faulting
+# during PLAYLIST TRANSITIONS — and the chapter-clipped queue makes every
+# chapter end of a downloaded book a playlist transition, landing exactly on
+# the silent tail real narration leaves there. The default-settings runs
+# (1-8) could never exercise this path.
+#
+# Row taps toggle (50-downloads-settings.yaml proves the pattern).
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Account menu"
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: ".*Settings.*"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: "Skip silence"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Skip silence"
+- back
+- assertVisible: "Home"

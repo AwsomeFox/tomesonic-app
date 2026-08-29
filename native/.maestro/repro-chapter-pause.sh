@@ -32,6 +32,11 @@ adb install android/app/build/outputs/apk/release/app-release.apk
 maestro test .maestro/flows/10-login.yaml \
   -e SERVER_URL=http://10.0.2.2:13378 -e ABS_USER=root -e ABS_PASS=testpass
 
+# The widespread-condition hypothesis rides every leg below: Skip silence ON
+# (SilenceSkippingAudioProcessor active) against media whose every boundary
+# ends in a silent tail. See repro/enable-skip-silence.yaml.
+maestro test .maestro/repro/enable-skip-silence.yaml
+
 # Clean slate so the dump below holds ONLY the repro window.
 adb logcat -c || true
 set +e
@@ -80,7 +85,11 @@ if [ "$rc" -eq 0 ]; then
       echo "::error::doze sandwich never reached deep idle (state: $deep) — refusing to let the doze leg no-op-pass"
       rc=1
     else
-      sleep 30
+      # 15s, not 30: with Skip silence ON the 5s silent tails vanish, so
+      # chapters play ~20s wall — a 30s window from ~ChapterStart+10s could
+      # overrun the whole book and stop playback LEGITIMATELY at its end,
+      # reading as a false red. 15s still crosses the first boundary.
+      sleep 15
       adb shell dumpsys deviceidle unforce || true
       echo "deviceidle deep state after unforce: $(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')"
       adb shell dumpsys battery reset || true

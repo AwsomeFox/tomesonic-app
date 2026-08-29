@@ -126,12 +126,24 @@ jobs:
           # Multi-file shape: two SHORT files so natural playback crosses the
           # file boundary inside a CI-friendly wait (regular e2e uses 90s
           # files precisely because its flows never play through one).
+          # Every chapter/file ENDS WITH 5s OF SILENCE, like real narration:
+          # the silence-skipping audio processor (the app's "Skip silence"
+          # setting, which the repro flow now turns ON) is maximally active at
+          # exactly the boundaries under test — and androidx/media #1352
+          # documents that processor faulting during playlist transitions.
+          # Pure sine tails could never trigger it.
           mkdir -p "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
           cd "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=30" \
+          ffmpeg -loglevel error \
+            -f lavfi -i "sine=frequency=440:duration=25" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=5" \
+            -filter_complex "[0][1]concat=n=2:v=0:a=1[a]" -map "[a]" \
             -metadata title="Chapter 1" -metadata artist="Test Author" \
             -metadata album="The Test Book" track1.mp3
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=550:duration=30" \
+          ffmpeg -loglevel error \
+            -f lavfi -i "sine=frequency=550:duration=25" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=5" \
+            -filter_complex "[0][1]concat=n=2:v=0:a=1[a]" -map "[a]" \
             -metadata title="Chapter 2" -metadata artist="Test Author" \
             -metadata album="The Test Book" track2.mp3
           # Chapter-queue shape: ONE m4b with three EMBEDDED 25s chapters.
@@ -161,8 +173,18 @@ jobs:
           # The heredoc above is indented for YAML; ffmetadata is
           # whitespace-sensitive, so strip the leading spaces.
           sed -i 's/^[[:space:]]*//' meta.txt
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=330:duration=75" \
-            -i meta.txt -map_metadata 1 -map_chapters 1 -c:a aac book.m4b
+          # 3 × (20s tone + 5s silence) = 75s, chapters at 0/25/50 — each
+          # embedded-chapter clip boundary sits at the END of a silent tail.
+          ffmpeg -loglevel error \
+            -f lavfi -i "sine=frequency=330:duration=20" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=5" \
+            -f lavfi -i "sine=frequency=392:duration=20" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=5" \
+            -f lavfi -i "sine=frequency=262:duration=20" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=5" \
+            -i meta.txt \
+            -filter_complex "[0][1][2][3][4][5]concat=n=6:v=0:a=1[a]" -map "[a]" \
+            -map_metadata 6 -map_chapters 6 -c:a aac book.m4b
           rm meta.txt
           ffprobe -loglevel error -show_chapters book.m4b | grep -c CHAPTER
 
