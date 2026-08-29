@@ -538,7 +538,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
@@ -796,7 +798,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
@@ -886,7 +890,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         // Token may have rotated since the original attempt; rebuild the url with the current one.
         const refreshedUrl = part.url.split("?")[0];
         const url = absoluteUrl(refreshedUrl, serverAddress, token);

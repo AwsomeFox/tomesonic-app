@@ -307,6 +307,26 @@ describe("useDownloadStore", () => {
       expect(db.getLocalLibraryItem("book1")).toBeTruthy();
     });
 
+    it("removes (not demotes) a legacy completed record with no track parts", async () => {
+      // Retry computes its work from the parts ledger; a trackless record
+      // demoted to "failed" would retry into an instant re-complete and
+      // resurrect the silent-streaming lie. The only honest state is gone.
+      const done = baseItem({
+        status: "completed",
+        progress: 1,
+        parts: [{ id: "cover", filename: "cover.jpg", url: "u1", bytesDownloaded: 10, fileSize: 10, completed: true }],
+      });
+      useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
+      db.saveLocalLibraryItem({ id: "item1", libraryItemId: "item1", isDownloaded: true });
+
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
+
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+      expect(db.getLocalLibraryItem("item1")).toBeFalsy();
+    });
+
     it("falls through to failDownload for an item that is only active", async () => {
       useDownloadStore.setState({
         activeDownloads: { item1: baseItem({ status: "downloading" }) },

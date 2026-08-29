@@ -495,6 +495,24 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       get().failDownload(id, reason);
       return;
     }
+    // A legacy completed record with NO track parts can't be repaired by
+    // retry at all: resume computes its work from the parts ledger, finds
+    // nothing to fetch, and immediately re-completes — resurrecting the
+    // very silent-streaming lie this demotion exists to end. The only
+    // honest state for such a record is GONE: remove the download (files,
+    // record, offline mapping) so the item page offers a plain fresh
+    // download.
+    const hasTrackParts = (item.parts || []).some(pt =>
+      String(pt?.id || "").startsWith("track_")
+    );
+    if (!hasTrackParts) {
+      console.warn(
+        "[Downloads] broken completed download has no track parts — removing instead of demoting",
+        id
+      );
+      await get().removeDownload(id);
+      return;
+    }
     // Retry/resume re-fetches exactly the `!p.completed` parts, so the
     // demotion must UN-COMPLETE what is actually broken or the retry
     // affordance fetches nothing and the book stays wedged. Stat each track
