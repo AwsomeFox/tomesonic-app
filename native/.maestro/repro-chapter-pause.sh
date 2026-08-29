@@ -50,12 +50,14 @@ rc=0
 # from Maestro assert latency (it dissolved runs 1-6's "early flip" reading).
 # dumpsys media_session prints the state=/position= pushed at each discrete
 # player state change.
+POS_LOG="$HOME/pos-samples.log"
+: > "$POS_LOG"
 (
   while true; do
     ts=$(date +%H:%M:%S)
     line=$(adb shell dumpsys media_session 2>/dev/null \
       | grep -E "state=PlaybackState" | head -1 | tr -s ' ')
-    echo "POS $ts $line"
+    echo "POS $ts $line" | tee -a "$POS_LOG"
     sleep 2
   done
 ) &
@@ -66,6 +68,21 @@ maestro test .maestro/repro/chapter-storm.yaml || rc=$?
 
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?
+
+# STOPPED-FINGERPRINT GATE (deterministic natural-crossing verdict): the
+# session pushes NONE on a proper stop-and-close and PAUSED on a pause
+# (run 15's timeline), so a STOPPED sample during dimensions 0-1 means the
+# player halted at an item end — the reported symptom, or an unplanned
+# queue end (run 14's oversized storm). Momentary Maestro asserts raced
+# these windows (a failing extendedWaitUntil can give up 2.5s into a 15s
+# timeout); this grep cannot. Scoped to dims 0-1: the doze dimension's
+# fixture legitimately plays out after its assert phase.
+if grep -q "state=STOPPED" "$POS_LOG"; then
+  echo "::error::STOPPED sample during dimensions 0-1 — playback halted at an item boundary:"
+  grep "state=STOPPED" "$POS_LOG" | head -5
+  rc=1
+fi
+: > "$POS_LOG"
 
 if [ "$rc" -eq 0 ]; then
   echo "########## dimension 2: boundary crossed under doze ##########"

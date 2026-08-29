@@ -17,11 +17,7 @@
 # scrollToIndex(current-2) on every chapter change, yanking the list back
 # each 8s boundary). The deep jump is a SKIP STORM instead: repeated "Next
 # chapter" taps — the same seekToChapter path the sheet rows call, and the
-# AVRCP next path the reporter's Bluetooth transport hits. The
-# natural-crossing proof needs no exact chapter: the "Chapter position"
-# slider's a11y value counts elapsed WITHIN the chapter, so a mid-chapter
-# reading followed by a low one again proves playback itself crossed a
-# boundary.
+# AVRCP next path the reporter's Bluetooth transport hits.
 #
 # Run 14 sized the storms wrong and paid for it: Maestro paces each tap by a
 # UI-settle wait (~8s here, because the slider/caption update keeps the UI
@@ -34,6 +30,19 @@
 # exclude the 100s so an end-of-book state can never satisfy them. Leg 1's
 # 45-tap+naturals interleave DID pass everything streamed — deep skips and
 # natural crossings both clean.
+#
+# Run 15 killed the "elapsed wrap" natural-crossing asserts: the slider's
+# momentary 1-3s windows race Maestro's polling, and a FAILING
+# extendedWaitUntil was observed giving up 2.5-7s into a 15s timeout — the
+# mechanism produced a false red over a POS-verified perfect run (and its
+# leg-1 passes landed at moments the window math can't explain, so its
+# greens weren't trustworthy either). The natural-crossing verdict now
+# lives in the RUNNER, deterministically: the 2s POS sampler records every
+# session state push, a proper stop-and-close reads NONE and a pause reads
+# PAUSED, so any mid-pipeline STOPPED sample is precisely the
+# stop-at-boundary fingerprint (or an unplanned queue end) — the runner
+# fails the run on it after dimension 1. In-flow, the progression floors
+# plus the Pause gates already require playback to keep advancing.
 appId: com.tomesonic.app
 ---
 - launchApp:
@@ -139,17 +148,6 @@ appId: com.tomesonic.app
     visible: "Chapter [3-6]\\d of 102"
     timeout: 10000
 - assertVisible: "Pause"
-# Natural-crossing proof: anchor mid-chapter (elapsed 5-9s of the 12s
-# chapter), then require a low reading again — only playback itself crossing
-# a boundary can wrap the counter, no taps are happening. 8s wall per
-# chapter at 1.5x, so 15s timeouts cover any phase.
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[5-9] elapsed.*"
-    timeout: 15000
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[0-3] elapsed.*"
-    timeout: 15000
-- assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"
 - tapOn: "More options"
@@ -182,14 +180,8 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Chapter \\d+ of 102"
     timeout: 15000
-# DOWNLOADED natural boundary at depth, before any storm touches it — the
-# purest match for "downloaded books pause at the end of each chapter".
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[5-9] elapsed.*"
-    timeout: 15000
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[0-3] elapsed.*"
-    timeout: 15000
+# DOWNLOADED natural boundaries at depth run under the sampler from here to
+# the storm — the runner's STOPPED-fingerprint gate is their judge.
 - assertVisible: "Pause"
 # Short storm: resumes ~ch45-60 after leg 1; 10 taps ≈ +20 chapters lands
 # ~ch65-80, well clear of 102. Floor excludes the 100s so an end-of-book
@@ -202,13 +194,6 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Chapter [6-9]\\d of 102"
     timeout: 10000
-- assertVisible: "Pause"
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[5-9] elapsed.*"
-    timeout: 15000
-- extendedWaitUntil:
-    visible: "Chapter position, 0:0[0-3] elapsed.*"
-    timeout: 15000
 - assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"

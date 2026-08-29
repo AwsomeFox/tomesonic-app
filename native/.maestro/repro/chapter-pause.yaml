@@ -100,19 +100,18 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 30000
+# The storm leg's 1.5x is app-global: 25s chapters play in ~17s, and the
+# ~20s of preamble/expand latency can outlive chapter 1 entirely (run 15
+# failed hunting "Chapter 1 of 3" while the player showed chapter 2) — so
+# the anchor accepts either of the first two chapters.
 - extendedWaitUntil:
-    visible: "Chapter 1 of 3"
+    visible: "Chapter [12] of 3"
     timeout: 15000
-# 25s chapter + margin. A pause AT the boundary leaves the caption on
-# "Chapter 1 of 3" (never advances) or flips it with "Play" showing — either
-# way one of the two asserts goes red.
-- extendedWaitUntil:
-    visible: "Chapter 2 of 3"
-    timeout: 45000
-- assertVisible: "Pause"
+# A pause AT a boundary leaves the caption stuck (never reaches 3) or flips
+# it with "Play" showing — either way one of the two asserts goes red.
 - extendedWaitUntil:
     visible: "Chapter 3 of 3"
-    timeout: 45000
+    timeout: 60000
 - assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"
@@ -159,9 +158,11 @@ appId: com.tomesonic.app
     visible: "Collapse player"
     timeout: 30000
 - extendedWaitUntil:
-    visible: "Chapter 1 of 2"
+    visible: "Chapter [12] of 2"
     timeout: 15000
-# 30s file + margin: the item auto-advance at the FILE boundary.
+# 30s file at 1.5x = ~20s: the item auto-advance at the FILE boundary. If
+# the anchor already caught chapter 2 this passes instantly — the boundary
+# was then crossed before the assert, with Pause below still gating it.
 - extendedWaitUntil:
     visible: "Chapter 2 of 2"
     timeout: 60000
