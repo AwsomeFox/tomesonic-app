@@ -1,0 +1,76 @@
+# REPRO, dimension 2: a chapter boundary crossed WHILE DOZED, on a DOWNLOADED
+# book. The foreground legs (chapter-pause.yaml) proved both queue shapes
+# auto-advance with the screen on; real listening happens with the screen off
+# and the device idling — and the nightly doze suite only ever covers
+# STREAMED playback, so the downloaded/local path has never crossed a
+# boundary under doze anywhere.
+#
+# Two phases in one file because Maestro can't run adb — the runner script
+# invokes PHASE=start, then force-idles the emulator across the 25s chapter
+# boundary (ci-doze.sh's sandwich), then invokes PHASE=assert:
+#   start:  play the downloaded m4b and PIN the position to the top of
+#           Chapter 1 via the chapters sheet (the foreground legs left this
+#           book finished, and a restart-vs-resume guess would make the doze
+#           window's landing chapter nondeterministic).
+#   assert: after ~30s of deep idle from ~ChapterStart+5s, the position must
+#           have crossed 25s: caption on Chapter 2, transport still playing.
+#           A pause at the boundary shows "Chapter 1 of 3" forever (never
+#           crossed) or "Play" over Chapter 2 (crossed, then paused) — either
+#           goes red.
+appId: com.tomesonic.app
+env:
+  PHASE: start
+---
+# ---- PHASE=start : downloaded m4b playing at the top of Chapter 1 --------
+- runFlow:
+    when:
+      true: ${PHASE == "start"}
+    commands:
+      - launchApp
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 20000
+      - tapOn:
+          text: "The Chapter Book by .*"
+          index: 0
+      - extendedWaitUntil:
+          visible: ".*(Play|Continue).*"
+          timeout: 15000
+      - tapOn: "^(Play|Continue)$"
+      - tapOn:
+          text: "Expand player.*"
+          optional: true
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 30000
+      # Deterministic anchor: jump to Chapter 1's top regardless of what the
+      # earlier legs left as this book's saved position / finished flag.
+      - tapOn: "Chapters and Up Next"
+      - extendedWaitUntil:
+          visible: "Chapter 1, starts at .*"
+          timeout: 5000
+      - tapOn: "Chapter 1, starts at .*"
+      - extendedWaitUntil:
+          visible: "Chapter 1 of 3"
+          timeout: 10000
+      # Playing, not paused, when the screen goes dark.
+      - assertVisible: "Pause"
+
+# ---- PHASE=assert : woke up past the boundary, still playing -------------
+- runFlow:
+    when:
+      true: ${PHASE == "assert"}
+    commands:
+      # Warm relaunch just brings the app forward; the session must have
+      # survived doze on its own.
+      - launchApp
+      - tapOn:
+          text: "Expand player.*"
+          optional: true
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 20000
+      - extendedWaitUntil:
+          visible: "Chapter 2 of 3"
+          timeout: 15000
+      - assertVisible: "Pause"

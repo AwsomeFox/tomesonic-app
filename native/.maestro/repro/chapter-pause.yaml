@@ -115,3 +115,13 @@ appId: com.tomesonic.app
 - assertVisible: "Pause"
 - tapOn: "Pause"
 - assertVisible: "Play"
+# Same teardown as the first leg: the doze flow runs AFTER this file and
+# opens its book by the same bare Play tap — leave no miniplayer to steal it.
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000
