@@ -94,7 +94,10 @@ jobs:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
-        run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
+        # Scoped to :app for the same reason as e2e-smoke: this job only
+        # installs the phone apk, and the unscoped task pulled the :wear and
+        # :automotive release dex merges into the same daemon heap.
+        run: ./gradlew :app:assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
 
       - name: upload APK
         uses: actions/upload-artifact@v4

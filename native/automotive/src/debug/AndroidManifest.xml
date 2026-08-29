@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY components. This file is merged into the debug variant's manifest
+  and into NO other variant: `:automotive:assembleRelease` (and the AAB the Play
+  workflow uploads) never sees a line of it.
+
+  It exists because the shipped manifest cannot hold this receiver.
+  ManifestRulesTest asserts that `src/main/AndroidManifest.xml` declares exactly
+  the sign-in and settings activities and nothing else — that is the PE-1 rule
+  ("no functionality outside setup/sign-in/settings while parked") held as a
+  test — and its `locateManifest()` probes `src/main/AndroidManifest.xml` paths
+  only, so nothing here is visible to it.
+
+  Everything below is the Wave 6 screenshot rig's
+  (native/automotive/screenshots/, .github/workflows/automotive-screenshots.yml).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <!-- Seeds credentials (and the resume pointer) from broadcast extras so
+             a workflow can sign the car in against the mock ABS server without
+             driving the sign-in form. See DebugSeed.kt for why it is exported
+             and why it is FLAG_DEBUGGABLE-gated in code as well as being
+             debug-source-set-only.
+
+             exported=true is FUNCTIONAL: the sender is `adb shell am broadcast`
+             — the shell uid, outside this app — and an un-exported receiver is
+             simply never delivered to. -->
+        <receiver
+            android:name="com.tomesonic.app.automotive.DebugSeed"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.tomesonic.app.automotive.DEBUG_SEED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

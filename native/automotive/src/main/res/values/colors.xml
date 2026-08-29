@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      The sign-in error line, on a LIGHT background (the day half of DayNight).
+
+      A theme attribute would have been better, but there isn't a safe one:
+      `android:colorError` only exists on the platform's Material themes and
+      `?attr/colorError` is Material Components', which this module deliberately
+      does not depend on. So the colour is ours, in two variants, chosen for
+      contrast rather than for brand — VD-1 is a car-review item and an error
+      the driver cannot read is the one line on this screen that must be legible.
+
+      #B3261E on AppCompat's light window background clears 4.5:1; see
+      values-night/colors.xml for the dark half, where the same red would not.
+    -->
+    <color name="car_error">#B3261E</color>
+</resources>

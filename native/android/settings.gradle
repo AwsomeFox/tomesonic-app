@@ -44,3 +44,8 @@ includeBuild(expoAutolinking.reactNativeGradlePlugin)
 // survives a prebuild.
 include ':wear'
 project(':wear').projectDir = new File(rootDir, '../wear')
+
+// Native Android Automotive OS app — lives outside this regenerated directory;
+// committed AND re-injected by plugins/withAutomotiveApp.js.
+include ':automotive'
+project(':automotive').projectDir = new File(rootDir, '../automotive')

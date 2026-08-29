@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The car sign-in form (ARCHITECTURE.md §6): server, username, password, one
+  button, full screen, ordinary touch keyboard. Parked-only by SYSTEM policy —
+  there is no code and no manifest attribute here that makes that happen, and
+  the absence of `distractionOptimized` is what leaves the decision with the
+  platform (§5).
+
+  Plain views, no Material: the module ships two screens in total and a design
+  system for them would outweigh them. Every colour is a theme attribute so the
+  form follows the car's day/night switch (Theme.TomeSonic.Car is DayNight).
+
+  Sizes are car-sized, not phone-sized: 56dp rows and 18sp text are readable at
+  an arm's length across a centre stack, which is where this is read even parked.
+
+  A ScrollView because the on-screen keyboard takes most of a 1024x768 landscape
+  head unit; SignInActivity pads this root by the IME inset so the submit button
+  is reachable rather than under the keys (AR-1, and plain usability).
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sign_in_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?android:attr/colorBackground"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="32dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="32dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:id="@+id/sign_in_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="16dp"
+            android:text="@string/sign_in_title"
+            android:textColor="?android:attr/textColorPrimary"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/sign_in_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="16dp"
+            android:text="@string/sign_in_subtitle"
+            android:textColor="?android:attr/textColorSecondary"
+            android:textSize="16sp" />
+
+        <EditText
+            android:id="@+id/sign_in_server"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="uri"
+            android:hint="@string/sign_in_server_hint"
+            android:imeOptions="actionNext"
+            android:inputType="textUri"
+            android:minHeight="56dp"
+            android:textSize="18sp" />
+
+        <!-- ARCHITECTURE.md §12 risk 1: a Play reviewer has no self-hosted ABS
+             instance and would otherwise see an empty app. One tap fills the
+             field above from SignInViewModel.DEMO_SERVER. -->
+        <TextView
+            android:id="@+id/sign_in_demo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:minHeight="48dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:text="@string/sign_in_demo"
+            android:textColor="?attr/colorAccent"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/sign_in_username"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="username"
+            android:hint="@string/sign_in_username_hint"
+            android:imeOptions="actionNext"
+            android:inputType="text"
+            android:minHeight="56dp"
+            android:textSize="18sp" />
+
+        <!-- imeOptions=actionDone submits: the keyboard covers the button on a
+             short head unit, and the Done key is the closest thing to hand. -->
+        <EditText
+            android:id="@+id/sign_in_password"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="password"
+            android:hint="@string/sign_in_password_hint"
+            android:imeOptions="actionDone"
+            android:inputType="textPassword"
+            android:minHeight="56dp"
+            android:textSize="18sp" />
+
+        <!-- The one line under the form. Its text is never a resource: the
+             sentences are SignInViewModel's, shared verbatim with the phone. -->
+        <TextView
+            android:id="@+id/sign_in_error"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="16dp"
+            android:textColor="@color/car_error"
+            android:textSize="16sp"
+            android:visibility="gone" />
+
+        <ProgressBar
+            android:id="@+id/sign_in_progress"
+            style="?android:attr/progressBarStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="16dp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/sign_in_submit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:minHeight="64dp"
+            android:text="@string/sign_in_submit"
+            android:textSize="18sp" />
+    </LinearLayout>
+</ScrollView>

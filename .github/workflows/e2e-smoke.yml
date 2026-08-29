@@ -103,7 +103,13 @@ jobs:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
-        run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
+        # Scoped to :app — this job only ever installs the PHONE apk on the
+        # emulator, and the unscoped task also dragged the :wear and :automotive
+        # release builds (and their dex merges) into the same 2–4GB daemon,
+        # which is what finally OOMed D8 once :automotive carried real
+        # dependencies. The jobs that genuinely ship all artifacts
+        # (github-releases, deploy-playstore) stay unscoped.
+        run: ./gradlew :app:assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
 
       - name: upload APK
         uses: actions/upload-artifact@v4

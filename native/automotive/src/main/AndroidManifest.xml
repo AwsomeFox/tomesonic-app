@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Marks this APK/AAB as the car artifact of the com.tomesonic.app Play
+         listing — Play only serves it to Android Automotive OS devices. -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- There is NO launcher activity in this artifact, ever: AAOS shows no
+         launcher icon for a media app and opens it by explicit intent from the
+         Media Center. ManifestRulesTest asserts the absence. -->
+    <!-- Component names are FULLY QUALIFIED, matching the :wear manifest:
+         applicationId (com.tomesonic.app) differs from the namespace
+         (com.tomesonic.app.automotive), so a leading-dot name — though the
+         merger does expand it against the namespace — is the one thing that
+         reads wrong here. -->
+    <!-- allowBackup=false: Wave 2 keeps the ABS access token in DataStore, and
+         a token must not ride device-to-device auto-backup onto hardware the
+         server never authorized. usesCleartextTraffic=true: self-hosted ABS
+         servers are very often plain http on a LAN — same posture as :wear and
+         the phone app. -->
+    <!-- android:name is the ONLY init site for Graph (Wave 2): with no launcher
+         activity, every start of this process is the Media Center binding or
+         starting AbsLibraryService, and Application.onCreate still runs first in
+         all of them. -->
+    <application
+        android:name="com.tomesonic.app.automotive.MainApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true"
+        android:appCategory="audio">
+
+        <!-- The AAOS descriptor, deliberately under this name and not Android
+             Auto's car-application descriptor: that one belongs to the phone
+             artifact and must never ride in this one. ManifestRulesTest greps
+             this file for its literal spelling, which is why the spelling is
+             not written out even in a comment. -->
+        <meta-data
+            android:name="com.android.automotive"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- The app's entire surface. exported=true is REQUIRED: the car's
+             Media Center, the Assistant and AVRCP all bind in from OUTSIDE this
+             app, and androidx.media3.session.MediaLibraryService is what a
+             SessionToken resolves to; the legacy MediaBrowserService action is
+             what pre-media3 car browse clients look for. mediaPlayback matches
+             the FOREGROUND_SERVICE_MEDIA_PLAYBACK permission above.
+
+             Later waves declare their own components next to the classes that
+             land — an unimplemented <service>/<activity> fails lintVitalRelease
+             with MissingClass, and github-releases.yml passes `-x lint` so PR
+             CI would not catch it (ARCHITECTURE.md §5). -->
+        <service
+            android:name="com.tomesonic.app.automotive.media.AbsLibraryService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Wave 4: the app's only two screens (ARCHITECTURE.md §5, §6).
+
+             PARKED-ONLY BY SYSTEM POLICY. Neither activity carries a
+             `distractionOptimized` meta-data element and neither ever may —
+             "Your app will be rejected during review if such an element is
+             present" — so the platform, not this app, decides they are
+             unavailable while driving. Nothing in the Kotlin asks about driving
+             state either. ManifestRulesTest asserts the absence by name.
+
+             Neither carries an ACTION_MAIN/CATEGORY_LAUNCHER filter, for the
+             same reason nothing in this artifact does: there is no launcher
+             icon on AAOS.
+
+             android:theme is on the activities rather than on <application>:
+             the media service draws no UI and has no business inheriting an
+             AppCompat theme, and Theme.TomeSonic.Car is what
+             PreferenceFragmentCompat (and AppCompatActivity) require.
+
+             No windowSoftInputMode on either: both go edge-to-edge explicitly
+             (WindowCompat.setDecorFitsSystemWindows(window, false)) and pad
+             themselves from the IME inset, which is ONE keyboard-handling path
+             on every api level rather than two that overlap. -->
+        <activity
+            android:name="com.tomesonic.app.automotive.ui.SignInActivity"
+            android:exported="true"
+            android:theme="@style/Theme.TomeSonic.Car" />
+
+        <!-- The car's Settings entry. The action is what makes the head unit
+             offer "TomeSonic settings" next to the app; CATEGORY_DEFAULT is
+             carried because a caller that starts this implicitly (rather than
+             by the component it resolved) needs it, and it costs nothing on the
+             explicit path. -->
+        <activity
+            android:name="com.tomesonic.app.automotive.ui.SettingsActivity"
+            android:exported="true"
+            android:label="@string/app_settings_activity_title"
+            android:theme="@style/Theme.TomeSonic.Car">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- AccountManager (mandatory on AAOS — §6: the car's Settings account
+             UI and guest mode's DISALLOW_MODIFY_ACCOUNTS both act through it).
+             exported=true is REQUIRED for the same reason it is on the media
+             service: AccountManagerService binds in from OUTSIDE this app, and
+             an un-exported authenticator is never called at all. The account
+             type lives in @xml/authenticator; tokens stay in the DataStore. -->
+        <service
+            android:name="com.tomesonic.app.automotive.account.AbsAuthenticatorService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/authenticator" />
+        </service>
+
+        <!-- WorkManager's own foreground service declares NO foregroundServiceType
+             in the library manifest, and with targetSdk 34+ the system refuses
+             the promotion without one — the DownloadWorker's "Downloading…"
+             notification would silently never appear. tools:node="merge" adds
+             the type onto the library's declaration instead of replacing it.
+             (FOREGROUND_SERVICE_DATA_SYNC is declared above.) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+    </application>
+</manifest>

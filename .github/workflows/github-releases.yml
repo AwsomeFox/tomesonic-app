@@ -37,8 +37,9 @@ jobs:
         # Run from native/android — the Sentry gradle snippet resolves its
         # script path relative to the working directory (see build-apk.yml).
         # Unscoped assembleRelease also builds the :wear module (Wear OS app,
-        # native/wear); both APKs are debug-signed here, same as before — the
-        # Play upload key is only passed in deploy-playstore.yml.
+        # native/wear) and the :automotive module (Android Automotive OS app,
+        # native/automotive); all three APKs are debug-signed here, same as
+        # before — the Play upload key is only passed in deploy-playstore.yml.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -56,6 +57,12 @@ jobs:
           version="${GITHUB_REF#refs/tags/}"
           mv wear-release.apk "tomesonic-wear-${version}.apk"
 
+      - name: Rename automotive APK
+        working-directory: native/automotive/build/outputs/apk/release/
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          mv automotive-release.apk "tomesonic-automotive-${version}.apk"
+
       - name: Generate Release Notes
         id: release_notes
         run: |
@@ -66,6 +73,7 @@ jobs:
           ### 📱 Download
           - **Android**: Download the APK below and install on your device
           - **Wear OS**: tomesonic-wear-${VERSION}.apk installs on the watch (adb -s SERIAL install)
+          - **Android Automotive OS**: tomesonic-automotive-${VERSION}.apk installs on the head unit (adb -s SERIAL install)
           - **Play Store**: Available on [Google Play Store](https://play.google.com/store/apps/details?id=com.tomesonic.app)
 
           ### 🔧 Technical Details
@@ -86,6 +94,7 @@ jobs:
           files: |
             native/android/app/build/outputs/apk/release/tomesonic-*.apk
             native/wear/build/outputs/apk/release/tomesonic-wear-*.apk
+            native/automotive/build/outputs/apk/release/tomesonic-automotive-*.apk
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
           generate_release_notes: true

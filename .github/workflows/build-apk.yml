@@ -78,7 +78,8 @@ jobs:
         # The New Architecture CMake-compiles all native libs per ABI, so
         # dropping the dead 32-bit ABIs halves the native compile time.
         # Unscoped, so this also builds the :wear module (Wear OS app,
-        # native/wear) — no separate task needed.
+        # native/wear) and the :automotive module (Android Automotive OS app,
+        # native/automotive) — no separate tasks needed.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -95,8 +96,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audiobookshelf-apk
-          # wear-debug.apk is the watch app — same applicationId, so install it
-          # to the watch only (adb -s <watch>), never over the phone build.
+          # wear-debug.apk is the watch app and automotive-debug.apk the car
+          # app — both share the phone's applicationId, so install each to its
+          # own device (adb -s <serial>), never over the phone build.
           path: |
             native/android/app/build/outputs/apk/debug/*.apk
             native/wear/build/outputs/apk/debug/*.apk
+            native/automotive/build/outputs/apk/debug/*.apk

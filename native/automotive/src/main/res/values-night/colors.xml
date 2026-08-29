@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      The dark half of the pair in values/colors.xml. The day red (#B3261E) is
+      a 2.7:1 smear on AppCompat's dark window background; this one clears
+      4.5:1 there and stays unmistakably an error colour.
+
+      This file carries the override ONLY — resource merging is per name, so the
+      theme in values/themes.xml is unaffected and has no night twin to drift.
+    -->
+    <color name="car_error">#F2B8B5</color>
+</resources>

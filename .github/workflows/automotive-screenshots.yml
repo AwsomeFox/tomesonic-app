@@ -1,0 +1,269 @@
+name: Automotive Screenshots
+
+# Store assets and PE-1 evidence, generated instead of hand-shot: boot an
+# Android Automotive OS emulator on both bundled head-unit profiles, install the
+# :automotive debug APK, point it at a fake AudiobookShelf server running on the
+# runner, open the car's MEDIA CENTER at our MediaLibraryService, and photograph
+# the browse tree, the sign-in screen and a driving-state smoke test.
+#
+# The four moving parts:
+#   native/automotive/screenshots/mock_abs.py — stdlib-only ABS stand-in on :3333
+#   native/automotive/screenshots/capture.sh  — what runs inside the emulator
+#   src/debug/.../DebugSeed.kt                — the debug-only broadcast receiver
+#                                               that signs the car in without
+#                                               driving the sign-in form
+#   src/debug/AndroidManifest.xml             — where that receiver is declared;
+#                                               it CANNOT live in src/main's
+#                                               manifest (ManifestRulesTest
+#                                               asserts that artifact declares
+#                                               exactly two activities)
+#
+# THE DIFFERENCE FROM THE WEAR RIG: this artifact has no launcher activity, so
+# there is nothing to `am start -n <pkg>/<MainActivity>`. capture.sh drives the
+# car's Media Center with `android.car.intent.action.MEDIA_TEMPLATE` +
+# `android.car.intent.extra.MEDIA_COMPONENT` instead — the exact strings, and
+# what is verified vs still to confirm, are in
+# native/automotive/screenshots/README.md.
+#
+# NOT a required check and deliberately narrow triggers: two emulator legs cost
+# ~50 emulator minutes and produce binaries, so it runs when the rig itself
+# changes or when a human asks for a fresh set.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/automotive-screenshots.yml'
+      - 'native/automotive/screenshots/**'
+      - 'native/automotive/src/debug/**'
+      # The bot commit at the end lands INSIDE the second path above (unlike the
+      # wear rig, whose PNGs go to a repo-root directory), so it would re-trigger
+      # this workflow. `[skip ci]` in the commit message is the primary guard;
+      # this negative pattern is the belt to that pair of braces. (`paths` and
+      # `paths-ignore` cannot both be used for one event — an excluding glob
+      # inside `paths` is how you say this.)
+      - '!native/automotive/screenshots/shots/**'
+
+# Pushing the PNGs back needs write access to the branch.
+permissions:
+  contents: write
+
+# One at a time per branch, and NEVER cancelled mid-flight: a run interrupted
+# between `git commit` and `git push` leaves the branch in a state the next run
+# has to guess at.
+concurrency:
+  group: automotive-screenshots-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  screenshots:
+    name: automotive-screenshots (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    # An AAOS image boots considerably slower than the wear one, and the capture
+    # itself walks three levels of a browse tree with settle times.
+    timeout-minutes: 50
+    strategy:
+      # Both legs photograph the SAME app; one profile failing to render is a
+      # reason to look at that profile, not to lose the other's evidence.
+      fail-fast: false
+      # SEQUENTIAL, deliberately: both legs commit PNGs to the same branch, and
+      # two pushes racing on one ref is exactly the interrupted-state problem the
+      # concurrency block above exists to avoid.
+      max-parallel: 1
+      matrix:
+        include:
+          # Play's two AAOS screenshot floors (>=2 landscape at 1024x768, >=2
+          # portrait at 800x1280, generic system image, no device frames). BOTH
+          # legs create their AVD from automotive_1024p_landscape — the first
+          # run proved it is the one AAOS device id this runner's avdmanager
+          # actually has (`Error: No device found matching --device
+          # automotive_portrait`) — and the portrait leg then reshapes the
+          # framebuffer via config.ini in the pre-launch hook below. Deterministic
+          # ini keys beat gambling on a user devices.xml schema; revisit if the
+          # runner's SDK ever grows the real automotive_portrait definition.
+          # `profile` stays the SHOT name (capture.sh file prefix); `device` is
+          # what avdmanager gets.
+          - profile: automotive_1024p_landscape
+            device: automotive_1024p_landscape
+            reshape: ""
+          - profile: automotive_portrait
+            device: automotive_1024p_landscape
+            reshape: "800x1280"
+    steps:
+      # Same reclaim e2e-smoke and the wear rig do: the gradle build, the
+      # emulator system image and the AVD together outgrow the runner's default
+      # free space.
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
+      - name: checkout sources
+        uses: actions/checkout@v4
+        with:
+          # A push event checks out a detached SHA; the commit step at the end
+          # has to be ON the branch to push back to it.
+          ref: ${{ github.ref_name }}
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # REQUIRED before gradle: :automotive itself has no JS, but configuring
+      # the build evaluates native/android, whose expo/RN gradle plugins resolve
+      # their scripts out of native/node_modules.
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: build automotive debug APK
+        # Run from native/android for the same reason build-apk.yml does — the
+        # Sentry snippet resolves its path with `node --print require.resolve`.
+        # Scoped to :automotive: nothing here installs the phone or watch build,
+        # and the unscoped task drags their dex merges into the same daemon
+        # (see e2e-smoke.yml's note about D8 OOMing).
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew :automotive:assembleDebug --no-daemon --stacktrace
+
+      - name: start the mock AudiobookShelf server
+        # nohup + a log file so it outlives this step. No ffmpeg/silence.mp3
+        # step, unlike the wear rig: that fixture exists to photograph a PLAYER,
+        # and this rig photographs BROWSE — the Media Center never asks for a
+        # byte of audio while browsing (see mock_abs.py's module docstring).
+        working-directory: native/automotive/screenshots
+        run: |
+          nohup python3 mock_abs.py > "$GITHUB_WORKSPACE/mock-abs.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3333/api/libraries > /dev/null && break
+            sleep 1
+          done
+          echo "--- /api/libraries ---"
+          curl -sf http://127.0.0.1:3333/api/libraries || exit 1
+          echo
+          echo "--- /api/me (progress rows back every badge in the tree) ---"
+          curl -sf http://127.0.0.1:3333/api/me || exit 1
+          echo
+          echo "--- cover bytes (the Media Center's own process fetches these) ---"
+          curl -sf "http://127.0.0.1:3333/api/items/li_book_1/cover?width=240&format=webp&token=demo" \
+            -o /tmp/cover-probe.png && file /tmp/cover-probe.png
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: capture screens on an Android Automotive OS emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # capture.sh names every file "<profile>-<screen>.png" with this.
+          SCREENSHOT_PROFILE: ${{ matrix.profile }}
+        with:
+          # WHY THIS PAIR. ARCHITECTURE.md §11 asks for 35-ext15 with 34-ext9 as
+          # the fallback; the action's inputs spell that as a PLATFORM api-level
+          # plus a separate `system-image-api-level` (its README: "API level of
+          # the system image - e.g. 34-ext10, 35-ext15. If not set the
+          # `api-level` input will be used"). The pair below is the one the
+          # action's OWN CI matrix runs for `target: android-automotive` — i.e.
+          # the only AAOS combination with public evidence of booting on this
+          # action — so it is what a first green run should be built on.
+          # TO UPGRADE once this rig is proven: api-level 35-ext15 with a
+          # matching system-image-api-level (drop the second input if the image
+          # and platform levels are the same), keeping target/arch as-is. Check
+          # `sdkmanager --list` for the exact
+          # `system-images;android-<level>;android-automotive;x86_64` id before
+          # switching — the AAOS images are published per extension level and
+          # not every level has an x86_64 one.
+          api-level: 34-ext10
+          system-image-api-level: 34-ext9
+          # NON-Play image, deliberately: on `android-automotive-playstore`
+          # images, distraction-optimized activities render only for
+          # Play-installed apps, which is useless in CI (ARCHITECTURE.md §11).
+          target: android-automotive
+          arch: x86_64
+          # The DEVICE id (see the matrix comment): landscape for both legs,
+          # because it is the only AAOS device this runner's avdmanager knows.
+          profile: ${{ matrix.device }}
+          disable-animations: true
+          # An AAOS image boots slower than a phone image, and this job's own
+          # 50-minute cap is the real backstop.
+          emulator-boot-timeout: 900
+          # The action's own defaults, spelled out. -noaudio is kept: a runner
+          # has no sound server, and nothing here plays a book.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Runs AFTER `avdmanager create avd`, BEFORE the emulator launches —
+          # the one hook where the AVD's framebuffer can be reshaped (the
+          # portrait leg turns the landscape device into Play's 800x1280
+          # floor). ONE line, same rule as `script:` below — the action runs
+          # each inline line in its own shell, and the first reshaped run
+          # failed on exactly that with a multi-line block here. The empty
+          # landscape arg makes the script a no-op.
+          pre-emulator-launch-script: bash native/automotive/screenshots/reshape-avd.sh "${{ matrix.reshape }}"
+          # ONE command: the action runs each line of an inline script in its
+          # own shell (see e2e-smoke.yml), which no multi-step capture survives.
+          script: bash native/automotive/screenshots/capture.sh
+
+      - name: report capture sizes
+        if: always()
+        run: |
+          ls -l native/automotive/screenshots/out || true
+          # Play's AAOS floors are 1024x768 landscape and 800x1280 portrait —
+          # `file` prints the real pixel size of each capture, which is the only
+          # proof the profile produced what the listing needs.
+          file native/automotive/screenshots/out/*.png || true
+          echo "--- mock server log (tail) ---"
+          tail -n 60 mock-abs.log || true
+
+      - name: commit screenshots
+        # Same shape as wear-screenshots.yml's commit step (same git config, same
+        # push), with one addition: the two matrix legs share a branch, so the
+        # second one to finish has to land on top of the first.
+        #
+        # No `if: always()`, exactly like wear's: capture.sh exits 1 when an
+        # assumption broke, and a run that photographed the wrong thing must not
+        # commit it. The artifacts still upload — that step IS always().
+        run: |
+          mkdir -p native/automotive/screenshots/shots
+          cp native/automotive/screenshots/out/*.png native/automotive/screenshots/shots/ 2>/dev/null || true
+          # PNGs only: logcat and the uiautomator dumps are debugging evidence
+          # and ship as artifacts, not as repo files.
+          git add native/automotive/screenshots/shots
+          if git diff --cached --quiet; then
+            echo "no screenshot changes to commit"
+            exit 0
+          fi
+          # [skip ci] so a commit of PNGs doesn't re-trigger build-apk, the unit
+          # tests, e2e — or this workflow.
+          git -c user.name='github-actions[bot]' \
+              -c user.email='github-actions[bot]@users.noreply.github.com' \
+              commit -m 'chore(automotive): emulator screenshots [skip ci]'
+          git -c user.name='github-actions[bot]' \
+              -c user.email='github-actions[bot]@users.noreply.github.com' \
+              pull --rebase origin "${{ github.ref_name }}"
+          git push
+
+      - name: upload screenshots and logs
+        # always(): a failed run's logcat, uiautomator dumps and mock-server log
+        # are the only evidence of WHY a screen came back blank or a tap missed.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automotive-screenshots-${{ matrix.profile }}
+          path: |
+            native/automotive/screenshots/out/
+            mock-abs.log
+          if-no-files-found: warn

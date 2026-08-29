@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The AccountManager descriptor AbsAuthenticatorService points at
+  (ARCHITECTURE.md §5, §6). AccountManagerService reads this file — not the
+  Kotlin — to learn the account type, so accountType here and
+  AbsAuthenticator.ACCOUNT_TYPE must stay the same string.
+
+  accountType is the applicationId, not the namespace: an account type is an
+  app-wide identity and this artifact shares one with the phone build (§1).
+
+  smallIcon is required in practice even though the type has only one icon —
+  the car's Settings list asks for it by name, and an account whose descriptor
+  has none renders as a blank row.
+-->
+<account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accountType="com.tomesonic.app"
+    android:icon="@mipmap/ic_launcher"
+    android:label="@string/app_name"
+    android:smallIcon="@mipmap/ic_launcher" />
