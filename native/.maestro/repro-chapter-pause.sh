@@ -38,6 +38,25 @@ set +e
 
 rc=0
 
+# POSITION TIMELINE: 2s samples of the media session's playback state while
+# the flows run. Run 6 showed the chapter-clipped queue advancing ~10-15s
+# into a 25s first chapter on EVERY run and stalling at a later boundary
+# once, with zero ExoPlayer log output — whether the AUDIO POSITION jumps at
+# the early flip (a structural queue disturbance skipping content) or runs
+# continuously under a wrong caption (an index mapping bug) is exactly what
+# this sampler decides. dumpsys media_session prints state=..., position=...
+# for the active session.
+(
+  while true; do
+    ts=$(date +%H:%M:%S)
+    line=$(adb shell dumpsys media_session 2>/dev/null \
+      | grep -E "state=PlaybackState" | head -1 | tr -s ' ')
+    echo "POS $ts $line"
+    sleep 2
+  done
+) &
+SAMPLER_PID=$!
+
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?
 
@@ -72,6 +91,8 @@ if [ "$rc" -eq 0 ]; then
   fi
 fi
 
+kill "$SAMPLER_PID" 2>/dev/null || true
+
 echo "==================== repro evidence (exit $rc) ===================="
 echo "-------------------- player logcat (filtered) ---------------------"
 adb logcat -d 2>/dev/null \
@@ -86,6 +107,15 @@ if [ -n "$latest" ]; then
     echo "---------- tail: $f ----------"
     tail -c 6000 "$f"
     echo
+  done
+  # The failure-step view hierarchies live one level down — the caption slot's
+  # ACTUAL text at the moment an assert died is the answer to most "what did
+  # the player show" questions, so extract just the caption-adjacent strings
+  # instead of dumping whole trees.
+  find "$latest" -path '*screen-hierarchy/*.json' -print | while read -r h; do
+    echo "---------- caption region of: $h ----------"
+    grep -oE '"(text|accessibilityText)":"[^"]{0,120}"' "$h" \
+      | grep -iE "chapter|pause|play|of [0-9]" | sort -u | head -30
   done
 fi
 echo "==================== end repro evidence ============================"
