@@ -186,6 +186,30 @@ jobs:
             -filter_complex "[0][1][2][3][4][5]concat=n=6:v=0:a=1[a]" -map "[a]" \
             -map_metadata 6 -map_chapters 6 -c:a aac book.m4b
           rm meta.txt
+          # THE REPORTED BOOK'S SHAPE: one m4b, 102 chapters (the reporter's
+          # failing book is a single 1.64GB m4b with 102 chapters — scaled to
+          # 102 × 7s). The chapter-storm flow streams it first (the reporter's
+          # own failing case: their download had silently failed) and then
+          # downloads it.
+          mkdir -p "$GITHUB_WORKSPACE/e2e-media/Test Author/The Long Book"
+          cd "$GITHUB_WORKSPACE/e2e-media/Test Author/The Long Book"
+          {
+            echo ";FFMETADATA1"
+            echo "title=The Long Book"
+            echo "artist=Test Author"
+            echo "album=The Long Book"
+            for i in $(seq 0 101); do
+              echo "[CHAPTER]"
+              echo "TIMEBASE=1/1000"
+              echo "START=$((i * 7000))"
+              echo "END=$(((i + 1) * 7000))"
+              echo "title=Chapter $((i + 1))"
+            done
+          } > longmeta.txt
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=294:duration=714" \
+            -i longmeta.txt -map_metadata 1 -map_chapters 1 -c:a aac long.m4b
+          rm longmeta.txt
+          ffprobe -loglevel error -show_chapters long.m4b | grep -c "\[CHAPTER\]"
           ffprobe -loglevel error -show_chapters book.m4b | grep -c CHAPTER
 
       - name: start + provision Audiobookshelf
@@ -209,14 +233,22 @@ jobs:
             | jq -r '.id')
           curl -sf -X POST "http://localhost:13378/api/libraries/$LIB/scan" \
             -H "Authorization: Bearer $TOKEN" || true
-          # BOTH books must surface before the flow runs.
+          # ALL THREE books must surface before the flow runs.
           for i in $(seq 1 60); do
             COUNT=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
               -H "Authorization: Bearer $TOKEN" | jq -r '.total // 0')
-            [ "$COUNT" -ge 2 ] && break; sleep 2
+            [ "$COUNT" -ge 3 ] && break; sleep 2
           done
           echo "library items: $COUNT"
-          [ "$COUNT" -ge 2 ]
+          [ "$COUNT" -ge 3 ]
+          # The storm book is the point of the run — 102 parsed chapters or bust.
+          LB=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=10" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r '.results[] | select(.media.metadata.title=="The Long Book") | .id')
+          LC=$(curl -sf "http://localhost:13378/api/items/$LB" \
+            -H "Authorization: Bearer $TOKEN" | jq '[.media.chapters[]?] | length')
+          echo "The Long Book parsed chapters: $LC"
+          [ "$LC" -ge 102 ]
           # The repro is meaningless if ABS didn't parse the embedded
           # chapters — fail the seed loudly instead of green-passing a
           # chapterless single-file book (which builds a ONE-item queue with

@@ -32,10 +32,9 @@ adb install android/app/build/outputs/apk/release/app-release.apk
 maestro test .maestro/flows/10-login.yaml \
   -e SERVER_URL=http://10.0.2.2:13378 -e ABS_USER=root -e ABS_PASS=testpass
 
-# The widespread-condition hypothesis rides every leg below: Skip silence ON
-# (SilenceSkippingAudioProcessor active) against media whose every boundary
-# ends in a silent tail. See repro/enable-skip-silence.yaml.
-maestro test .maestro/repro/enable-skip-silence.yaml
+# Match the reporting user's REAL settings: skip silence OFF (they confirmed
+# it off and still failing — run 9 tested the on-state), voice boost ON.
+maestro test .maestro/repro/enable-voice-boost.yaml
 
 # Clean slate so the dump below holds ONLY the repro window.
 adb logcat -c || true
@@ -44,13 +43,10 @@ set +e
 rc=0
 
 # POSITION TIMELINE: 2s samples of the media session's playback state while
-# the flows run. Run 6 showed the chapter-clipped queue advancing ~10-15s
-# into a 25s first chapter on EVERY run and stalling at a later boundary
-# once, with zero ExoPlayer log output — whether the AUDIO POSITION jumps at
-# the early flip (a structural queue disturbance skipping content) or runs
-# continuously under a wrong caption (an index mapping bug) is exactly what
-# this sampler decides. dumpsys media_session prints state=..., position=...
-# for the active session.
+# the flows run — the ground truth that separates a real transition stall
+# from Maestro assert latency (it dissolved runs 1-6's "early flip" reading).
+# dumpsys media_session prints the state=/position= pushed at each discrete
+# player state change.
 (
   while true; do
     ts=$(date +%H:%M:%S)
@@ -61,6 +57,9 @@ rc=0
   done
 ) &
 SAMPLER_PID=$!
+
+echo "########## dimension 0: the reported book's shape (102-chapter m4b) ##########"
+maestro test .maestro/repro/chapter-storm.yaml || rc=$?
 
 echo "########## dimension 1: foreground boundary crossings ##########"
 maestro test .maestro/repro/chapter-pause.yaml || rc=$?

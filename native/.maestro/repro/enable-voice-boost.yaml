@@ -1,0 +1,24 @@
+# Turn ON "Enhance voice" (voice boost) before the repro flows run — matching
+# the reporting user's real settings (skip silence OFF, voice boost ON).
+# Voice boost binds a LoudnessEnhancer to the ExoPlayer audio session and
+# re-creates it on every audio-session change; a 102-chapter clipped queue
+# multiplies the churn opportunities.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Account menu"
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: ".*Settings.*"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: "Enhance voice"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Enhance voice"
+- back
+- assertVisible: "Home"
