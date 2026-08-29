@@ -238,7 +238,18 @@ api.interceptors.response.use(
       try {
         appLogger.info("Attempting token refresh...", "API");
         let response: any = null;
-        let lastRefreshError: any = null;
+        let definitiveError: any = null;
+        // A candidate that was never actually HEARD by the server — timeout,
+        // connection reset, a proxy 5xx — may be the LIVE token: after the
+        // native Android Auto service rotates the pair, auto_creds holds the
+        // only valid refresh token while the stored one is already dead. Under
+        // poor reception the fresh candidate's POST can vanish into the void
+        // while the stale one reaches the server and draws a REAL 401 — and
+        // classifying the round by whichever error came last logged the user
+        // out of a live session ("drove the car, came home to bad signal,
+        // suddenly signed out"). Track transient failures separately: the
+        // round is definitive only when EVERY candidate got a 401/403 answer.
+        let transientError: any = null;
         // Remember WHICH candidate actually produced the successful refresh —
         // it may be the file token rather than the stored one. When the server
         // doesn't rotate (omits a new refreshToken), we must persist the token
@@ -263,13 +274,21 @@ api.interceptors.response.use(
             );
             usedRefreshToken = refreshToken;
             break;
-          } catch (err) {
-            lastRefreshError = err;
+          } catch (err: any) {
+            const s = err?.response?.status;
+            if (s === 401 || s === 403) definitiveError = err;
+            else transientError = err;
             response = null;
           }
         }
         if (!response) {
-          throw lastRefreshError || new Error("Token refresh failed");
+          // Throw the TRANSIENT error when the round had one: the logout
+          // classification below keys off the thrown error's status, and with
+          // an unheard candidate in the round the session's life is unknown —
+          // the next 401 retries the refresh with the same (or a fresher
+          // auto_creds) pair instead of stranding a possibly-live session at
+          // the Connect screen.
+          throw transientError || definitiveError || new Error("Token refresh failed");
         }
 
         if (response.status === 200 && response.data?.user?.accessToken) {
