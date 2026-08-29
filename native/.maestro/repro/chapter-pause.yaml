@@ -1,0 +1,104 @@
+# REPRO: "with some downloaded books playback paused at the end of each
+# chapter". Downloads both seeded book shapes and plays each NATURALLY across
+# its chapter boundaries — no seeks, no chapter buttons — because the bug (if
+# real) lives in the END-OF-ITEM auto-advance, a path every existing flow
+# sidesteps (they pause first or jump within a chapter).
+#
+# Two shapes, two queue modes:
+#  - "The Chapter Book": ONE m4b file, 3 embedded 25s chapters → the
+#    chapter-clipped queue (one clipped RNTP item per chapter).
+#  - "The Test Book": TWO 30s files, chapters derived per-file by ABS → the
+#    multi-file queue (one item per file).
+#
+# Both are DOWNLOADED first (the report is about downloaded books; a
+# downloaded book plays its local copy even online). The assert pattern at
+# each boundary is:
+#   1. the "Chapter N of M" caption advances (times out → playback never left
+#      the old chapter: reproduced), then
+#   2. the transport still shows "Pause" (shows "Play" → playback advanced
+#      but PAUSED at the boundary: reproduced).
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+
+# ---- Download the chapter-queue book -------------------------------------
+- tapOn:
+    text: "The Chapter Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 120000
+
+# ---- Play it through BOTH embedded-chapter boundaries --------------------
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Chapter 1 of 3"
+    timeout: 15000
+# 25s chapter + margin. A pause AT the boundary leaves the caption on
+# "Chapter 1 of 3" (never advances) or flips it with "Play" showing — either
+# way one of the two asserts goes red.
+- extendedWaitUntil:
+    visible: "Chapter 2 of 3"
+    timeout: 45000
+- assertVisible: "Pause"
+- extendedWaitUntil:
+    visible: "Chapter 3 of 3"
+    timeout: 45000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "Collapse player"
+- back
+
+# ---- Download the multi-file book ----------------------------------------
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: "The Test Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 120000
+
+# ---- Play it through the file boundary -----------------------------------
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Chapter 1 of 2"
+    timeout: 15000
+# 30s file + margin: the item auto-advance at the FILE boundary.
+- extendedWaitUntil:
+    visible: "Chapter 2 of 2"
+    timeout: 60000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
