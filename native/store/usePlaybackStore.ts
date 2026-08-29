@@ -2546,7 +2546,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           (positional.id === key || String(positional.id).startsWith(`${key}_`))
             ? positional
             : (download.parts || []).find((p: any) => p.id === key);
-        const path = part?.localFilePath || (localFolder && part ? `${localFolder}${part.filename}` : null);
+        // Legacy persisted folder paths can lack the trailing slash — a bare
+        // concatenation built ".../item1track_0.m4b" and the native player
+        // failed on a file that exists (same defense as joinFolderFile in
+        // useDownloadStore / ensureLocalCover in the downloader).
+        const path =
+          part?.localFilePath ||
+          (localFolder && part
+            ? localFolder.endsWith("/")
+              ? `${localFolder}${part.filename}`
+              : `${localFolder}/${part.filename}`
+            : null);
         if (!path) return null;
         return path.startsWith("file://") ? path : `file://${path}`;
       };

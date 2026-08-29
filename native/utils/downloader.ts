@@ -549,6 +549,11 @@ export const downloader = {
 
       // If we finished all parts successfully
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
         console.log(`[Downloader] Download completed successfully for book: ${title}`);
@@ -801,6 +806,11 @@ export const downloader = {
       }
 
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
         console.log(`[Downloader] Episode download completed: ${title}`);
@@ -889,6 +899,11 @@ export const downloader = {
       }
 
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
         console.log(`[Downloader] Resume completed successfully for book: ${title}`);
