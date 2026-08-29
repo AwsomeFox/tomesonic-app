@@ -104,6 +104,41 @@ echo "proxied /status with toxics on: ${t}s"
 # honestly-shaped leg by 8ms.
 if awk -v t="$t" 'BEGIN{exit !(t >= 0.4)}'; then
   maestro test .maestro/repro/chapter-throttle.yaml || rc=$?
+
+  if [ "$rc" -eq 0 ]; then
+    echo "########## dimension 0.6: link flaps at a cold boundary open ##########"
+    # Runs 20-21 proved the streamed transition machinery survives honest
+    # slowness (the 256MB shared cache defuses the per-boundary moov cost).
+    # The surviving suspect for "sometimes it won't play again until
+    # killing the app" is what happens when the strained link DROPS: the
+    # store's retry ladder is bounded (2s/10s/30s) and WiFi never flaps,
+    # so nothing else ever re-fires. Flap A must self-recover (a rung
+    # lands after the link returns); flap B outlasts the ladder and the
+    # manual Play in the assert flow must bring playback back.
+    maestro test .maestro/repro/throttle-flap-start.yaml || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "== flap A: 40s blackhole (ladder's last rung lands after restore) =="
+      docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t timeout \
+        -a timeout=0 --downstream abs_slow || true
+      sleep 40
+      docker exec toxiproxy /toxiproxy-cli toxic remove -n flap abs_slow || true
+      echo "== flap A over; waiting out the retry ladder =="
+      sleep 60
+      last=$(tail -n 1 "$POS_LOG")
+      echo "post-flap-A session state: $last"
+      if ! echo "$last" | grep -q "state=PLAYING"; then
+        echo "::error::playback did NOT self-recover after a 40s flap the retry ladder should survive"
+        rc=1
+      else
+        echo "== flap B: 100s blackhole (outlasts every retry rung) =="
+        docker exec toxiproxy /toxiproxy-cli toxic add -n flap -t timeout \
+          -a timeout=0 --downstream abs_slow || true
+        sleep 100
+        docker exec toxiproxy /toxiproxy-cli toxic remove -n flap abs_slow || true
+        maestro test .maestro/repro/throttle-flap-assert.yaml || rc=$?
+      fi
+    fi
+  fi
 else
   echo "::error::toxics did not measurably slow the proxied request (${t}s) — the throttle leg cannot run honestly"
   rc=1

@@ -1,0 +1,28 @@
+# REPRO, dimension 0.6, phase 2: the after-the-long-flap judgment. The
+# 100s blackhole outlasted the store's whole bounded retry ladder
+# (2s/10s/30s — every rung fired into the dead link and failed), the
+# link is back, and NOTHING fires again on its own: WiFi never dropped,
+# so the connectivity-regained recovery can't trigger either. That is the
+# app's designed resting state — and the reported "won't play again until
+# killing the app and restart" is the claim that even MANUAL play fails
+# here. So: if the transport still shows Play, press it; playback MUST
+# come back. If it doesn't, this flow reproduces the wedge with the
+# sampler recording exactly what the player did instead.
+appId: com.tomesonic.app
+---
+# Bring the app forward WITHOUT killing it — the wedge (if any) must be
+# observed, not reset away.
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 20000
+- runFlow:
+    when:
+      notVisible: "Pause"
+    commands:
+      - tapOn: "Play"
+- extendedWaitUntil:
+    visible: "Pause"
+    timeout: 45000
+- assertVisible: "Chapter \\d+ of 102"

@@ -1,0 +1,90 @@
+# REPRO, dimension 0.6, phase 1: put the STREAMED book in a thin-buffer
+# state over the still-throttled link, then leave it playing. The runner
+# then blackholes the server path (toxiproxy timeout toxic) across the
+# moment the buffer runs dry — the strained-home-server drop that the
+# report's "sometimes it won't play again until killing the app" points
+# at. Two flaps follow:
+#
+#   A. 40s — shorter than buffer + the store's bounded retry ladder
+#      (2s/10s/30s): the ladder's last rung fires after the link returns,
+#      so playback MUST self-recover (runner verdict: the POS sampler's
+#      last state is PLAYING again).
+#   B. 100s — outlasts every rung: the ladder exhausts while the link is
+#      dead, auto-recovery is legitimately gone, and the manual Play in
+#      throttle-flap-assert.yaml MUST bring it back.
+#
+# The next-chapter tap right before the end matters: it forces a cold
+# open at 24KB/s so the buffer is thin (~10-15s) when the first flap
+# lands, instead of the minutes maxBuffer can hold.
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
+- runFlow:
+    when:
+      visible: "Expand player.*"
+    commands:
+      - tapOn: "Expand player.*"
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+- runFlow:
+    when:
+      notVisible: "The Slow Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: "The Slow Book by .*"
+    direction: DOWN
+    timeout: 20000
+- tapOn:
+    text: "The Slow Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 20000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 102"
+    timeout: 60000
+- assertVisible: "Pause"
+# Thin the buffer: a cold seek at 24KB/s restarts buffering from ~zero.
+- tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 102"
+    timeout: 30000
+- assertVisible: "Pause"
