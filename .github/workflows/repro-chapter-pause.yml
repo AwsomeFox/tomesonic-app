@@ -16,6 +16,15 @@ name: Repro - chapter boundary pause
 # ExoPlayer/RNTP lines around each boundary are the point of the run.
 on:
   workflow_dispatch:
+  # API dispatch resolves workflow files against the DEFAULT branch, so a
+  # branch-only rig can't be dispatched by name — self-trigger on the rig's
+  # own files instead (the automotive-screenshots pattern): every rig tweak
+  # pushed to the branch is a run.
+  push:
+    paths:
+      - '.github/workflows/repro-chapter-pause.yml'
+      - 'native/.maestro/repro/**'
+      - 'native/.maestro/repro-chapter-pause.sh'
 
 concurrency:
   group: repro-chapter-pause-${{ github.ref }}
