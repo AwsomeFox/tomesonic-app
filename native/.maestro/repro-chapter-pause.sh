@@ -84,10 +84,11 @@ if [ "$rc" -eq 0 ]; then
       echo "::error::doze sandwich never reached deep idle (state: $deep) — refusing to let the doze leg no-op-pass"
       rc=1
     else
-      # 15s, not 30: with Skip silence ON the 5s silent tails vanish, so
-      # chapters play ~20s wall — a 30s window from ~ChapterStart+10s could
-      # overrun the whole book and stop playback LEGITIMATELY at its end,
-      # reading as a false red. 15s still crosses the first boundary.
+      # 15s, not 30: the storm leg set 1.5x and playback speed is app-global,
+      # so this book's 30s-wall chapters play in ~20s — a 30s window from
+      # ~ChapterStart+10s could overrun the whole 75s book and stop playback
+      # LEGITIMATELY at its end, reading as a false red. 15s still crosses
+      # the first boundary with margin on both sides.
       sleep 15
       adb shell dumpsys deviceidle unforce || true
       echo "deviceidle deep state after unforce: $(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')"

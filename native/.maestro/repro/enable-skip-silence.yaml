@@ -1,5 +1,9 @@
-# Turn ON the "Skip silence" setting before the repro flows run. This is the
-# widespread-condition hypothesis: skip-silence routes audio through media3's
+# TOGGLE the "Skip silence" setting (lands ON in CI: 10-login just launched
+# with cleared state, so the setting starts at its OFF default — a LOCAL
+# re-run against a warm install flips it back OFF). Kept for on-demand use;
+# the pipeline no longer runs it: run 9 tested this condition and it PASSED,
+# and the reporting user has skip silence off. Original hypothesis, for the
+# record: skip-silence routes audio through media3's
 # SilenceSkippingAudioProcessor, which androidx/media #1352 documents faulting
 # during PLAYLIST TRANSITIONS — and the chapter-clipped queue makes every
 # chapter end of a downloaded book a playlist transition, landing exactly on

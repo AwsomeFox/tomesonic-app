@@ -126,12 +126,12 @@ jobs:
           # Multi-file shape: two SHORT files so natural playback crosses the
           # file boundary inside a CI-friendly wait (regular e2e uses 90s
           # files precisely because its flows never play through one).
-          # Every chapter/file ENDS WITH 5s OF SILENCE, like real narration:
-          # the silence-skipping audio processor (the app's "Skip silence"
-          # setting, which the repro flow now turns ON) is maximally active at
-          # exactly the boundaries under test — and androidx/media #1352
-          # documents that processor faulting during playlist transitions.
-          # Pure sine tails could never trigger it.
+          # Every chapter/file ENDS WITH 5s OF SILENCE, like real narration.
+          # Kept from the skip-silence experiment (run 9 toggled that setting
+          # on against these tails and PASSED — hypothesis eliminated; the
+          # pipeline now runs voice boost instead, per the reporting user's
+          # real settings) because silence-tailed boundaries stay the
+          # realistic shape whatever condition is under test.
           mkdir -p "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
           cd "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
           ffmpeg -loglevel error \
