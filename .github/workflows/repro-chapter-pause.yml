@@ -229,8 +229,12 @@ jobs:
       # exactly what ExoPlayer did (transition reasons, state changes, errors).
       - name: capture device logcat
         if: always()
+        # `timeout`: adb against a dead/never-booted emulator can BLOCK rather
+        # than fail — run 1 hung here for 20+ minutes, wedging the artifact
+        # upload behind it until the job was cancelled (which also discards
+        # the step logs the run existed to produce).
         run: |
-          adb -s emulator-5554 logcat -d > $HOME/full-logcat.txt || true
+          timeout 90 adb -s emulator-5554 logcat -d > $HOME/full-logcat.txt || true
           grep -iE "ExoPlayer|RNTP|TrackPlayer|CONSOLE|ReactNativeJS|AndroidRuntime|FATAL|AudioTrack|MediaCodec" \
             $HOME/full-logcat.txt > $HOME/logcat-player.txt || true
           wc -l $HOME/full-logcat.txt $HOME/logcat-player.txt || true
