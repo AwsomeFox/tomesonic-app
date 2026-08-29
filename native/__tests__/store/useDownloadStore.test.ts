@@ -250,6 +250,27 @@ describe("useDownloadStore", () => {
       expect(db.getLocalLibraryItem("item1")).toBeFalsy();
     });
 
+    it("retracts the mapping by the DOWNLOAD id, not libraryItemId (episode composite keys)", () => {
+      // Episode downloads key by `${libraryItemId}::${episodeId}` — the offline
+      // row is saved under that composite id, and removing by bare
+      // libraryItemId would leave the stale isDownloaded claim standing.
+      const done = baseItem({
+        id: "book1::ep1",
+        libraryItemId: "book1",
+        status: "completed",
+        progress: 1,
+      });
+      useDownloadStore.setState({ completedDownloads: { "book1::ep1": done }, activeDownloads: {} });
+      db.saveLocalLibraryItem({ id: "book1::ep1", libraryItemId: "book1", isDownloaded: true });
+      db.saveLocalLibraryItem({ id: "book1", libraryItemId: "book1", isDownloaded: true });
+
+      useDownloadStore.getState().markDownloadBroken("book1::ep1", "broken");
+
+      expect(db.getLocalLibraryItem("book1::ep1")).toBeFalsy();
+      // The sibling BOOK row (different download) is untouched.
+      expect(db.getLocalLibraryItem("book1")).toBeTruthy();
+    });
+
     it("falls through to failDownload for an item that is only active", () => {
       useDownloadStore.setState({
         activeDownloads: { item1: baseItem({ status: "downloading" }) },

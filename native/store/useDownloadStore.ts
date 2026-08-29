@@ -472,8 +472,11 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     db.saveDownloadItem(brokenItem);
     // The offline mapping said "isDownloaded" — that claim is what let every
     // surface (item page, offline library) keep vouching for a copy the
-    // player couldn't use. Retract it until a retry re-completes.
-    db.removeLocalLibraryItem(item.libraryItemId || id);
+    // player couldn't use. Retract it until a retry re-completes. The row is
+    // keyed by the DOWNLOAD id (what completeDownload saved) — for episodes
+    // that composite id differs from libraryItemId, and removing by the
+    // wrong key would leave the stale claim standing (or clip a sibling's).
+    db.removeLocalLibraryItem(id);
     set(state => {
       const nextCompleted = { ...state.completedDownloads };
       delete nextCompleted[id];

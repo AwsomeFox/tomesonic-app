@@ -551,8 +551,14 @@ export const downloader = {
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Download completed successfully for book: ${title}`);
+      } else {
+        // Validation demoted the completion (missing/empty file on disk):
+        // take the in-progress notification down and tell the truth — the
+        // Downloads UI carries the retryable failure.
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Download failed on-disk validation for book: ${title}`);
       }
-      console.log(`[Downloader] Download completed successfully for book: ${title}`);
 
       // This book is done — release the running guard.
       runningBooks.delete(id);
@@ -797,8 +803,11 @@ export const downloader = {
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Episode download completed: ${title}`);
+      } else {
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Episode download failed on-disk validation: ${title}`);
       }
-      console.log(`[Downloader] Episode download completed: ${title}`);
       runningBooks.delete(id);
     } catch (err: any) {
       if (!isCurrent()) return;
@@ -882,8 +891,11 @@ export const downloader = {
       await useDownloadStore.getState().completeDownload(id, localFolderPath);
       if (useDownloadStore.getState().completedDownloads[id]) {
         downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Resume completed successfully for book: ${title}`);
+      } else {
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Resume failed on-disk validation for book: ${title}`);
       }
-      console.log(`[Downloader] Resume completed successfully for book: ${title}`);
     } catch (err: any) {
       if (!isCurrent()) return;
       console.error(`[Downloader] Resume failed for book ${title}:`, err);
