@@ -163,12 +163,12 @@ describe("useDownloadStore.updateDownloadProgress ratio invariants", () => {
       expect(useDownloadStore.getState().activeDownloads["item1"].progress).toBe(0.99);
     });
 
-    it("only completeDownload takes progress to 1", () => {
+    it("only completeDownload takes progress to 1", async () => {
       useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "downloading" }) } });
       useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 1000, 1000);
       expect(useDownloadStore.getState().activeDownloads["item1"].progress).toBe(0.99);
 
-      useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
       expect(useDownloadStore.getState().completedDownloads["item1"].progress).toBe(1);
     });
   });

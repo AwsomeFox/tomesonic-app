@@ -80,7 +80,13 @@ beforeEach(() => {
     resumables.push(entry);
     return entry;
   });
-  (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });
+  // Folders read as absent (exercises the mkdir path); FILES read as present
+  // with a size — completeDownload now stats every track file before
+  // believing a completion, and a blanket exists:false would demote every
+  // finished download in this suite to "failed" (the silent-streaming fix).
+  (FileSystem.getInfoAsync as jest.Mock).mockImplementation(async (p: any) =>
+    String(p).endsWith("/") ? { exists: false } : { exists: true, size: 1234 }
+  );
   (FileSystem.makeDirectoryAsync as jest.Mock).mockResolvedValue(undefined);
   (FileSystem.deleteAsync as jest.Mock).mockResolvedValue(undefined);
   (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValue([]);

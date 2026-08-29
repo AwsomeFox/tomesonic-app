@@ -548,8 +548,10 @@ export const downloader = {
       }
 
       // If we finished all parts successfully
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+      }
       console.log(`[Downloader] Download completed successfully for book: ${title}`);
 
       // This book is done — release the running guard.
@@ -792,8 +794,10 @@ export const downloader = {
         return;
       }
 
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+      }
       console.log(`[Downloader] Episode download completed: ${title}`);
       runningBooks.delete(id);
     } catch (err: any) {
@@ -875,8 +879,10 @@ export const downloader = {
         return;
       }
 
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+      }
       console.log(`[Downloader] Resume completed successfully for book: ${title}`);
     } catch (err: any) {
       if (!isCurrent()) return;

@@ -124,8 +124,14 @@ interface DownloadState {
   setDownloadFolder: (id: string, localFolderPath: string) => void;
   updateDownloadProgress: (id: string, partId: string, bytesDownloaded: number, fileSize: number) => void;
   completeDownloadPart: (id: string, partId: string, localFilePath: string) => void;
-  completeDownload: (id: string, localFolderPath: string) => void;
+  completeDownload: (id: string, localFolderPath: string) => Promise<void>;
   failDownload: (id: string, errorMsg: string) => void;
+  // Demote a COMPLETED download whose files turn out broken/missing (found at
+  // playback time) back to a retryable failure — failDownload only touches
+  // active items, so a bad completed copy had NO path back to honesty: the
+  // item page kept showing "Delete download" while playback silently
+  // streamed. Keeps parts so retryDownload resumes just the missing pieces.
+  markDownloadBroken: (id: string, reason: string) => void;
   cancelDownload: (id: string) => void;
   // Delete a download's files (completed or partial) + remove it from local media.
   removeDownload: (id: string) => Promise<void>;
@@ -362,10 +368,38 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     }));
   },
 
-  completeDownload: (id, localFolderPath) => {
+  completeDownload: async (id, localFolderPath) => {
     const active = get().activeDownloads;
     const item = active[id];
     if (!item) return;
+
+    // VALIDATE BEFORE BELIEVING: the reporting user's book was marked
+    // downloaded while playback silently streamed — a "completed" record
+    // whose audio files aren't actually on disk is worse than a failure,
+    // because every surface then lies. Stat every track part; a missing or
+    // empty file demotes the download to a retryable failure instead of
+    // recording a completion the player can't honor. Stat EXCEPTIONS stay
+    // fail-open (a transient fs hiccup must not brick a good download) —
+    // only a definitive exists:false / size 0 fails.
+    const trackParts = (item.parts || []).filter(
+      p => String(p?.id || "").startsWith("track_") && p.completed
+    );
+    for (const part of trackParts) {
+      const raw =
+        part.localFilePath || (localFolderPath ? `${localFolderPath}${part.filename}` : null);
+      if (!raw) continue;
+      const path = raw.startsWith("file://") ? raw : `file://${raw}`;
+      try {
+        const info: any = await FileSystem.getInfoAsync(path, { size: true } as any);
+        if (!info?.exists || info?.size === 0) {
+          console.warn("[Downloads] completed download failed validation", id, part.id, path);
+          get().failDownload(id, "Download incomplete — tap retry to resume");
+          return;
+        }
+      } catch {
+        // fail-open: can't stat ≠ known-missing
+      }
+    }
 
     const completedItem = {
       ...item,
@@ -421,6 +455,33 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         [id]: failedItem,
       },
     }));
+  },
+
+  markDownloadBroken: (id, reason) => {
+    const item = get().completedDownloads[id];
+    if (!item) {
+      // Already active (or unknown): the ordinary failure path handles it.
+      get().failDownload(id, reason);
+      return;
+    }
+    const brokenItem = {
+      ...item,
+      status: "failed" as const,
+      error: reason || "Downloaded copy incomplete — tap retry to re-download",
+    };
+    db.saveDownloadItem(brokenItem);
+    // The offline mapping said "isDownloaded" — that claim is what let every
+    // surface (item page, offline library) keep vouching for a copy the
+    // player couldn't use. Retract it until a retry re-completes.
+    db.removeLocalLibraryItem(item.libraryItemId || id);
+    set(state => {
+      const nextCompleted = { ...state.completedDownloads };
+      delete nextCompleted[id];
+      return {
+        completedDownloads: nextCompleted,
+        activeDownloads: { ...state.activeDownloads, [id]: brokenItem },
+      };
+    });
   },
 
   cancelDownload: (id) => {
