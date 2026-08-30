@@ -30,6 +30,7 @@ jest.mock("../../utils/autoCreds", () => ({
   readAutoCreds: jest.fn().mockResolvedValue(null),
   writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
+  writeAutoChapters: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock("../../utils/downloader", () => ({
   downloader: {},
@@ -337,6 +338,24 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     expect(addedTracks()).toHaveLength(1);
     // The chapter UX still has its data.
     expect(usePlaybackStore.getState().chapters).toHaveLength(40);
+  });
+
+  it("mirrors the book's chapters for the native Android Auto Chapters section", async () => {
+    // The AA browse tree's "Chapters" rows (play:<id>@@<start>) are fed by
+    // this mirror — it is what keeps the chapter list in the car for books
+    // the duration cap prepares FLAT.
+    const { writeAutoChapters } = require("../../utils/autoCreds");
+    jest.mocked(writeAutoChapters).mockClear();
+    await prepareChapterBook();
+    expect(writeAutoChapters).toHaveBeenCalledWith({
+      itemId: "item1",
+      title: "The Hobbit",
+      chapters: [
+        { title: "Chapter 1", start: 0 },
+        { title: "Chapter 2", start: 100 },
+        { title: "Chapter 3", start: 200 },
+      ],
+    });
   });
 
   it("keeps the chapter queue for a book exactly AT the duration cap", async () => {

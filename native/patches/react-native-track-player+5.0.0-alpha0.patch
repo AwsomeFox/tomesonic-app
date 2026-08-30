@@ -493,7 +493,7 @@ index 13a6c60..249abb4 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..7fcf22e 100644
+index b495b5a..0570696 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -587,7 +587,7 @@ index b495b5a..7fcf22e 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -92,33 +152,1392 @@ class MusicService : HeadlessJsMediaService() {
+@@ -92,35 +152,1473 @@ class MusicService : HeadlessJsMediaService() {
  
      @ExperimentalCoroutinesApi
      override fun onCreate() {
@@ -663,7 +663,18 @@ index b495b5a..7fcf22e 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
+-                )
+-            )
+-            .build()
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -704,9 +715,9 @@ index b495b5a..7fcf22e 100644
 +        // Track connectivity so Android Auto browse flips between the online
 +        // catalog and downloaded-only (and back) via notifyChildrenChanged.
 +        absRegisterNetworkCallback()
-+        super.onCreate()
-+    }
-+
+         super.onCreate()
+     }
+ 
 +    /**
 +     * Reflectively clears Media3's private static
 +     * MediaSession.SESSION_ID_TO_SESSION_MAP to drop any "zombie" session
@@ -1090,6 +1101,47 @@ index b495b5a..7fcf22e 100644
 +        return null
 +    }
 +
++    // JS mirrors the now-playing book's chapter list into auto_chapters.json
++    // (utils/autoCreds.writeAutoChapters). The browse tree's "Chapters"
++    // section is built from it: play:<itemId>@@<startSeconds> rows — the same
++    // start-and-seek mechanism the bookmark-style ids use — so a tap
++    // keeps/starts the book and jumps to the chapter. This is how the chapter
++    // list reaches the car WITHOUT a queue item per chapter: preparing each
++    // clipped item re-parses the whole file's moov tables, which OOM'd very
++    // long books (CHAPTER_QUEUE_MAX_SECONDS caps those to a FLAT queue).
++    private fun absChaptersMirror(): org.json.JSONObject? {
++        val raw = absReadMirror("auto_chapters.json") ?: return null
++        return try {
++            val o = org.json.JSONObject(raw)
++            val ok = o.optString("itemId").isNotEmpty() &&
++                (o.optJSONArray("chapters")?.length() ?: 0) > 1
++            if (ok) o else null
++        } catch (_: Exception) {
++            null
++        }
++    }
++
++    private fun absChapterRows(): List<MediaItem> {
++        val o = absChaptersMirror() ?: return emptyList()
++        val itemId = o.optString("itemId")
++        val chapters = o.optJSONArray("chapters") ?: return emptyList()
++        val out = mutableListOf<MediaItem>()
++        for (i in 0 until chapters.length()) {
++            val ch = chapters.optJSONObject(i) ?: continue
++            val start = ch.optDouble("start", -1.0)
++            if (start < 0) continue
++            val title = ch.optString("title").ifEmpty { "Chapter ${i + 1}" }
++            val h = (start / 3600).toInt()
++            val m = ((start.toInt() % 3600) / 60)
++            val at = if (h > 0) "${h}h ${m}m" else "${m}m"
++            // inlineArt=false: one book's cover repeated across 100+ rows
++            // would overflow the Binder transaction the same way per-item
++            // queue artwork did.
++            out.add(absPlayableItem("play:$itemId@@$start", itemId, title, null, at, null, inlineArt = false))
++        }
++        return out
++    }
++
 +    // Parse the auto_downloads.json mirror into the offline catalog map. Two row
 +    // shapes coexist: legacy bare-string ids (badge only, no offline play) and
 +    // rich JSONObject rows carrying title/author/folder/cover + a tracks[] list.
@@ -1470,15 +1522,7 @@ index b495b5a..7fcf22e 100644
 +        java.net.URLEncoder.encode(
 +            android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP),
 +            "UTF-8"
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +
 +    private fun absItemsFromResults(
 +        path: String,
@@ -1765,22 +1809,58 @@ index b495b5a..7fcf22e 100644
 +        // fires notifyChildrenChanged and the online catalog is re-added.
 +        if (!absOnline()) {
 +            return when (parentId) {
-+                "__ROOT__" -> listOf(
-+                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
-                 )
++                "__ROOT__" -> {
++                    val root = mutableListOf(
++                        absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
++                    )
++                    // Chapters of the now-playing / last-played book work
++                    // offline too — the play:<id>@@<sec> tap resolves against
++                    // the downloaded files on a cold start.
++                    absChaptersMirror()?.let { ch ->
++                        root.add(
++                            absBrowsableItem(
++                                "__CHAPTERS__",
++                                "Chapters",
++                                ch.optString("title").takeIf { it.isNotEmpty() },
++                                childPlayableStyle = STYLE_LIST
++                            )
++                        )
++                    }
++                    root
++                }
++                "__CHAPTERS__" -> absChapterRows()
 +                "__DOWNLOADS__" -> absDownloadsCategory()
 +                else -> absDownloadsCategory()
 +            }
 +        }
 +        when {
-+            parentId == "__ROOT__" -> return listOf(
-+                absBrowsableItem("__CONTINUE__", "Continue Listening", iconRes = "aa_continue", childPlayableStyle = STYLE_GRID),
-+                absBrowsableItem("__CONTINUE_SERIES__", "Continue Series", iconRes = "aa_series", childBrowsableStyle = STYLE_GRID),
-+                absBrowsableItem("__DOWNLOADS__", "Downloads", iconRes = "aa_downloads", childPlayableStyle = STYLE_GRID),
-+                absBrowsableItem("__LIBRARIES__", "Libraries", iconRes = "aa_library", childBrowsableStyle = STYLE_CATEGORY_LIST)
-             )
--            .build()
--        super.onCreate()
++            parentId == "__ROOT__" -> {
++                val root = mutableListOf(
++                    absBrowsableItem("__CONTINUE__", "Continue Listening", iconRes = "aa_continue", childPlayableStyle = STYLE_GRID),
++                    absBrowsableItem("__CONTINUE_SERIES__", "Continue Series", iconRes = "aa_series", childBrowsableStyle = STYLE_GRID),
++                    absBrowsableItem("__DOWNLOADS__", "Downloads", iconRes = "aa_downloads", childPlayableStyle = STYLE_GRID),
++                    absBrowsableItem("__LIBRARIES__", "Libraries", iconRes = "aa_library", childBrowsableStyle = STYLE_CATEGORY_LIST)
++                )
++                // Chapters of the now-playing (or last-played) book — fed by
++                // the JS auto_chapters.json mirror. This is the car's chapter
++                // list for books the duration cap prepares FLAT (no
++                // chapter-per-queue-item build), and a convenience for the
++                // rest. Placed right after Continue Listening.
++                absChaptersMirror()?.let { ch ->
++                    root.add(
++                        1,
++                        absBrowsableItem(
++                            "__CHAPTERS__",
++                            "Chapters",
++                            ch.optString("title").takeIf { it.isNotEmpty() },
++                            artworkPath = "/api/items/${ch.optString("itemId")}/cover",
++                            childPlayableStyle = STYLE_LIST
++                        )
++                    )
++                }
++                return root
++            }
++            parentId == "__CHAPTERS__" -> return absChapterRows()
 +            parentId == "__CONTINUE__" -> return absContinueListening()
 +            parentId == "__CONTINUE_SERIES__" -> return absContinueSeries()
 +            parentId == "__DOWNLOADS__" -> return absDownloadsCategory()
@@ -1990,10 +2070,12 @@ index b495b5a..7fcf22e 100644
 +        // seconds.
 +        absColdStartOffsetMs = (chosen.optDouble("startOffset", 0.0) * 1000).toLong()
 +        return Pair(url, (withinSec * 1000).toLong())
-     }
- 
++    }
++
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -166,6 +1585,40 @@ class MusicService : HeadlessJsMediaService() {
+         CONTINUE_PLAYBACK("continue-playback"),
+         PAUSE_PLAYBACK("pause-playback"),
+@@ -166,6 +1664,40 @@ class MusicService : HeadlessJsMediaService() {
      override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
          onStartCommandIntentValid = intent != null
          Timber.d("onStartCommand: ${intent?.action}, ${intent?.`package`}")
@@ -2034,7 +2116,7 @@ index b495b5a..7fcf22e 100644
          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
              // HACK: this is not supposed to be here. I definitely screwed up. but Why?
              onMediaKeyEvent(intent)
-@@ -206,11 +1659,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1738,77 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -2114,7 +2196,7 @@ index b495b5a..7fcf22e 100644
          observeEvents()
      }
  
-@@ -293,9 +1812,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1891,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -2126,7 +2208,7 @@ index b495b5a..7fcf22e 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1825,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1904,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -2188,7 +2270,7 @@ index b495b5a..7fcf22e 100644
          }
      }
  
-@@ -395,8 +1948,270 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,8 +2027,270 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2459,7 +2541,7 @@ index b495b5a..7fcf22e 100644
          player.stop()
      }
  
-@@ -449,6 +2264,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2343,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2470,7 +2552,7 @@ index b495b5a..7fcf22e 100644
      }
  
      @MainThread
-@@ -495,6 +2314,24 @@ class MusicService : HeadlessJsMediaService() {
+@@ -495,6 +2393,24 @@ class MusicService : HeadlessJsMediaService() {
          }
      }
  
@@ -2495,7 +2577,7 @@ index b495b5a..7fcf22e 100644
      @MainThread
      fun updateNowPlayingMetadata(bundle: Bundle) {
          updateMetadataForTrack(player.currentIndex, bundle)
-@@ -515,6 +2352,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2431,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2733,7 +2815,7 @@ index b495b5a..7fcf22e 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -530,6 +2598,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -530,6 +2677,18 @@ class MusicService : HeadlessJsMediaService() {
              event.stateChange.collect {
                  emit(MusicEvents.PLAYBACK_STATE, getPlayerStateBundle(it))
  
@@ -2752,7 +2834,7 @@ index b495b5a..7fcf22e 100644
                  if (it == AudioPlayerState.ENDED && player.nextItem == null) {
                      emitQueueEndedEvent()
                  }
-@@ -654,11 +2734,100 @@ class MusicService : HeadlessJsMediaService() {
+@@ -654,11 +2813,100 @@ class MusicService : HeadlessJsMediaService() {
  
          scope.launch {
              event.playbackError.collect {
@@ -2767,10 +2849,10 @@ index b495b5a..7fcf22e 100644
 +                    it.code?.let { c -> putString("code", "android-$c") }
 +                })
 +                absErrRetryArm()
-             }
-         }
-     }
- 
++            }
++        }
++    }
++
 +    // --- ABS native playback-error auto-retry -------------------------------
 +    // The app's JS retry ladder is frame-driven on Android and never fires
 +    // while the app is backgrounded, so an errored player used to stay silent
@@ -2826,10 +2908,10 @@ index b495b5a..7fcf22e 100644
 +                    // finished) — recovery is moot; don't tick forever.
 +                    absErrRetryDisarm()
 +                }
-+            }
-+        }
-+    }
-+
+             }
+         }
+     }
+ 
 +    private fun absErrRetrySchedule() {
 +        absErrRetryHandler.removeCallbacks(absErrRetryRunnable)
 +        absErrRetryHandler.postDelayed(absErrRetryRunnable, absErrRetryDelayMs(absErrRetryAttempt))
@@ -2854,7 +2936,7 @@ index b495b5a..7fcf22e 100644
      private fun getPlaybackErrorBundle(): Bundle {
          val bundle = Bundle()
          val error = playbackError
-@@ -717,7 +2886,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2965,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2863,7 +2945,7 @@ index b495b5a..7fcf22e 100644
              return
          }
  
-@@ -780,8 +2949,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +3028,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2879,7 +2961,7 @@ index b495b5a..7fcf22e 100644
          return mediaSession
      }
  
-@@ -792,13 +2967,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +3046,50 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2932,22 +3014,12 @@ index b495b5a..7fcf22e 100644
          super.onDestroy()
      }
  
-@@ -831,24 +3043,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +3122,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
 -                KeyEvent.KEYCODE_MEDIA_NEXT -> {
 -                    emit(MusicEvents.BUTTON_SKIP_NEXT)
--                    true
--                }
--
--                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
--                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
--                    true
--                }
--
--                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
--                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
 -                    true
 +                // The car steering-wheel / console FF/RW / next+previous transport
 +                // keys seek by the user's configured jump increment, NOT to the
@@ -2979,6 +3051,16 @@ index b495b5a..7fcf22e 100644
 +                    } else null
                  }
  
+-                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+-                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
+-                    true
+-                }
+-
+-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+-                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
+-                    true
+-                }
+-
 -                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
 -                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
 -                    true
@@ -2993,7 +3075,7 @@ index b495b5a..7fcf22e 100644
                  }
  
                  else -> null
-@@ -886,6 +3118,20 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3197,20 @@ class MusicService : HeadlessJsMediaService() {
              val isMediaNotificationController = session.isMediaNotificationController(controller)
              val isAutomotiveController = session.isAutomotiveController(controller)
              val isAutoCompanionController = session.isAutoCompanionController(controller)
@@ -3014,7 +3096,7 @@ index b495b5a..7fcf22e 100644
              emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
                  putString("package", controller.packageName)
                  putBoolean("isMediaNotificationController", isMediaNotificationController)
-@@ -905,24 +3151,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +3230,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -3211,7 +3293,7 @@ index b495b5a..7fcf22e 100644
 +            val playItem = mediaItems.firstOrNull { it.mediaId.startsWith("play:") }
 +            if (playItem == null || reactContext != null) {
 +                return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
-+            }
+             }
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
 +            absSubmitBrowse(onReject = {
 +                future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
@@ -3270,12 +3352,12 @@ index b495b5a..7fcf22e 100644
 +                    } else item
 +                }.toMutableList()
 +                future.set(resolved)
-             }
++            }
 +            return future
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3396,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3475,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -3305,7 +3387,7 @@ index b495b5a..7fcf22e 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3428,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3507,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3321,7 +3403,7 @@ index b495b5a..7fcf22e 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3444,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3523,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

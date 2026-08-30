@@ -81,6 +81,41 @@ export async function writeAutoDownloads(entries: AutoDownloadEntry[]) {
   }
 }
 
+// Mirrors the NOW-PLAYING book's chapter list so the native Android Auto
+// browse service can offer a "Chapters" section — each row is a
+// `play:<itemId>@@<startSeconds>` id (the same start-and-seek mechanism the
+// Bookmarks-style ids use), so a tap keeps/starts the book and jumps to the
+// chapter. This is how the chapter list reaches the car WITHOUT building a
+// queue item per chapter: a very long single file prepares as ONE item (see
+// CHAPTER_QUEUE_MAX_SECONDS — every clipped item's prepare re-parsed the
+// whole file's moov tables and OOM'd long sessions), and this section keeps
+// full chapter navigation in AA for exactly those books. Deliberately KEPT
+// on close: the section then lists the LAST played book's chapters, and a
+// tap resumes it at that chapter.
+const CHAPTERS_PATH = `${FileSystem.documentDirectory}auto_chapters.json`;
+
+export async function writeAutoChapters(
+  payload: {
+    itemId: string;
+    title: string;
+    chapters: { title: string; start: number }[];
+  } | null
+) {
+  try {
+    if (payload && payload.itemId && (payload.chapters?.length || 0) > 1) {
+      await atomicWrite(CHAPTERS_PATH, JSON.stringify(payload));
+    } else {
+      await FileSystem.deleteAsync(CHAPTERS_PATH, { idempotent: true });
+      // Native readers fall back to .tmp when the main file is missing — a
+      // leftover temp from an interrupted write would resurrect the cleared
+      // list.
+      await FileSystem.deleteAsync(`${CHAPTERS_PATH}.tmp`, { idempotent: true }).catch(() => {});
+    }
+  } catch (e) {
+    console.warn("[AutoCreds] chapters write failed", e);
+  }
+}
+
 // Mirrors the current library's personalized home shelves for the configurable
 // home-row home-screen widget (HomeRowWidgetProvider + its RemoteViewsService).
 // Each widget instance is configured (in its placement screen) to show ONE of

@@ -6,7 +6,7 @@ import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
-import { writeWidgetState } from "../utils/autoCreds";
+import { writeWidgetState, writeAutoChapters } from "../utils/autoCreds";
 import { refreshPlayerWidgets } from "../utils/widgetRefresh";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
 import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
@@ -111,10 +111,13 @@ export const MAX_CAR_TILE_ITEMS = 64;
 // caches). Books over the cap prepare as a FLAT single-item queue instead:
 // chapter titles, navigation and seeks all still work (they run on
 // `chapters` + absolute positions — the single-item paths downstream), and
-// only Android Auto's per-chapter queue rows are traded away. At 10h the
-// whole-file table is ~12MB/copy — comfortably inside even the default
-// heap, and far below it with largeHeap on.
-export const CHAPTER_QUEUE_MAX_SECONDS = 10 * 3600;
+// the native Android Auto "Chapters" browse section (fed by
+// writeAutoChapters) keeps the chapter list in the car for flat books too,
+// so nothing user-facing is lost. With android:largeHeap (512MB) the cap
+// sits at 20h: the whole-file table is ~25MB/copy there (two copies live at
+// a boundary ≈ 60MB of tables) — typical audiobooks keep the per-chapter
+// AA queue rows, only true monsters go flat.
+export const CHAPTER_QUEUE_MAX_SECONDS = 20 * 3600;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -2938,6 +2941,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       _queueSource =
         streamTrackCount === 0 ? "local" : localTrackCount === 0 ? "stream" : "mixed";
+
+      // Mirror the book's chapters for the native Android Auto "Chapters"
+      // browse section (play:<id>@@<start> rows — start-and-seek). Written
+      // for EVERY chaptered book, but it is what keeps full chapter
+      // navigation in the car for books the duration cap prepares FLAT.
+      // Books only — an episode's play id would need the ::episode suffix.
+      // Optional-called: test doubles of autoCreds may not stub it.
+      if (!session.episodeId && chapters.length > 1) {
+        writeAutoChapters?.({
+          itemId: session.libraryItemId,
+          title: bookTitle,
+          chapters: chapters.map((ch: any, i: number) => ({
+            title: ch.title || `Chapter ${i + 1}`,
+            start: ch.start || 0,
+          })),
+        })?.catch(() => {});
+      }
 
       if (streamedDespiteDownload && download) {
         // Tell the user NOW (they believe this book is on-device) and make
