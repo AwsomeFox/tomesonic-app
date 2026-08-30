@@ -222,10 +222,10 @@ index 5a1b2bf..0066850 100644
  }
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
-index a0f995c..78ef6ff 100644
+index a0f995c..f09e26b 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
-@@ -430,12 +430,24 @@ abstract class BaseAudioPlayer internal constructor(
+@@ -430,12 +430,30 @@ abstract class BaseAudioPlayer internal constructor(
          }
  
          override fun onPlayerError(error: PlaybackException) {
@@ -236,9 +236,15 @@ index a0f995c..78ef6ff 100644
 +            val root = generateSequence(error.cause) { it.cause }.lastOrNull()
 +            val message = buildString {
 +                append(error.message ?: error.errorCodeName)
-+                if (root != null && root.message != error.message) {
++                if (root != null) {
++                    // Always name the root exception CLASS — ExoPlayer often
++                    // repeats one message up the chain, and the class (e.g.
++                    // CodecException vs FileNotFoundException) is the detail
++                    // that matters. Only the message is deduped.
 +                    append(" <- ").append(root.javaClass.simpleName)
-+                    if (!root.message.isNullOrBlank()) append(": ").append(root.message)
++                    if (!root.message.isNullOrBlank() && root.message != error.message) {
++                        append(": ").append(root.message)
++                    }
 +                }
 +            }
              val _playbackError = PlaybackError(
