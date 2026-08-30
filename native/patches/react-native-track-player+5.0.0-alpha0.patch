@@ -221,6 +221,42 @@ index 5a1b2bf..0066850 100644
      }
  }
  
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
+index a0f995c..f09e26b 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/BaseAudioPlayer.kt
+@@ -430,12 +430,30 @@ abstract class BaseAudioPlayer internal constructor(
+         }
+ 
+         override fun onPlayerError(error: PlaybackException) {
++            // ExoPlayer's top-level message is often just "Source error" — the
++            // actionable detail (which decoder, which file, which IO failure)
++            // lives down the cause chain. Append the root cause so the app's
++            // field diagnostics can name what actually broke.
++            val root = generateSequence(error.cause) { it.cause }.lastOrNull()
++            val message = buildString {
++                append(error.message ?: error.errorCodeName)
++                if (root != null) {
++                    // Always name the root exception CLASS — ExoPlayer often
++                    // repeats one message up the chain, and the class (e.g.
++                    // CodecException vs FileNotFoundException) is the detail
++                    // that matters. Only the message is deduped.
++                    append(" <- ").append(root.javaClass.simpleName)
++                    if (!root.message.isNullOrBlank() && root.message != error.message) {
++                        append(": ").append(root.message)
++                    }
++                }
++            }
+             val _playbackError = PlaybackError(
+                 error.errorCodeName
+                     .replace("ERROR_CODE_", "")
+                     .lowercase(Locale.getDefault())
+                     .replace("_", "-"),
+-                error.message
++                message
+             )
+             playerEventHolder.updatePlaybackError(_playbackError)
+             playbackError = _playbackError
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt
 index dd4bd40..f869b5a 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt
@@ -457,7 +493,7 @@ index 13a6c60..249abb4 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..ee3046f 100644
+index b495b5a..7fcf22e 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -627,15 +663,7 @@ index b495b5a..ee3046f 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -1093,7 +1121,7 @@ index b495b5a..ee3046f 100644
 +                    v.optDouble("currentTime", 0.0),
 +                    v.optDouble("duration", 0.0),
 +                    tracks
-                 )
++                )
 +            }
 +        }
 +        return out
@@ -1442,7 +1470,15 @@ index b495b5a..ee3046f 100644
 +        java.net.URLEncoder.encode(
 +            android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP),
 +            "UTF-8"
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +
 +    private fun absItemsFromResults(
 +        path: String,
@@ -1731,7 +1767,7 @@ index b495b5a..ee3046f 100644
 +            return when (parentId) {
 +                "__ROOT__" -> listOf(
 +                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
-+                )
+                 )
 +                "__DOWNLOADS__" -> absDownloadsCategory()
 +                else -> absDownloadsCategory()
 +            }
@@ -2152,7 +2188,7 @@ index b495b5a..ee3046f 100644
          }
      }
  
-@@ -395,6 +1948,266 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,8 +1948,270 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2418,8 +2454,12 @@ index b495b5a..ee3046f 100644
 +
      @MainThread
      fun stop() {
++        // A deliberate stop is not a recovery candidate.
++        absErrRetryDisarm()
          player.stop()
-@@ -449,6 +2262,10 @@ class MusicService : HeadlessJsMediaService() {
+     }
+ 
+@@ -449,6 +2264,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2430,7 +2470,7 @@ index b495b5a..ee3046f 100644
      }
  
      @MainThread
-@@ -495,6 +2312,24 @@ class MusicService : HeadlessJsMediaService() {
+@@ -495,6 +2314,24 @@ class MusicService : HeadlessJsMediaService() {
          }
      }
  
@@ -2455,7 +2495,7 @@ index b495b5a..ee3046f 100644
      @MainThread
      fun updateNowPlayingMetadata(bundle: Bundle) {
          updateMetadataForTrack(player.currentIndex, bundle)
-@@ -515,6 +2350,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2352,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2693,7 +2733,128 @@ index b495b5a..ee3046f 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2783,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -530,6 +2598,18 @@ class MusicService : HeadlessJsMediaService() {
+             event.stateChange.collect {
+                 emit(MusicEvents.PLAYBACK_STATE, getPlayerStateBundle(it))
+ 
++                // A real playback state means the error is behind us — stand
++                // the native auto-retry down. LOADING/BUFFERING stay armed:
++                // our own re-prepare passes through them and can still fail
++                // back to ERROR (which must keep the ladder position, not
++                // reset it).
++                if (it == AudioPlayerState.READY ||
++                    it == AudioPlayerState.PLAYING ||
++                    it == AudioPlayerState.PAUSED
++                ) {
++                    absErrRetryDisarm()
++                }
++
+                 if (it == AudioPlayerState.ENDED && player.nextItem == null) {
+                     emitQueueEndedEvent()
+                 }
+@@ -654,11 +2734,100 @@ class MusicService : HeadlessJsMediaService() {
+ 
+         scope.launch {
+             event.playbackError.collect {
+-                emit(MusicEvents.PLAYBACK_ERROR, getPlaybackErrorBundle())
++                // Emit the COLLECTED error, not the player's mutable property:
++                // EVENT_MEDIA_ITEM_TRANSITION nulls that property, and an error
++                // AT an item transition (a chapter boundary — exactly the
++                // errors that matter) raced it, so the event used to reach JS
++                // with no code and no message.
++                emit(MusicEvents.PLAYBACK_ERROR, Bundle().apply {
++                    it.message?.let { m -> putString("message", m) }
++                    it.code?.let { c -> putString("code", "android-$c") }
++                })
++                absErrRetryArm()
+             }
+         }
+     }
+ 
++    // --- ABS native playback-error auto-retry -------------------------------
++    // The app's JS retry ladder is frame-driven on Android and never fires
++    // while the app is backgrounded, so an errored player used to stay silent
++    // until the user happened to foreground the app. This Handler lives in the
++    // foreground service and keeps running in the background: re-prepare the
++    // errored player on a 2s/10s/30s then 60s cadence until a real playback
++    // state comes back. prepare() resumes from the error position and honors
++    // playWhenReady, so interrupted listening continues by itself; on a player
++    // that recovered some other way the attempt guard makes this a no-op.
++    private val absErrRetryHandler = android.os.Handler(android.os.Looper.getMainLooper())
++    private var absErrRetryArmed = false
++    private var absErrRetryAttempt = 0
++
++    private fun absErrRetryDelayMs(attempt: Int): Long = when (attempt) {
++        0 -> 2_000L
++        1 -> 10_000L
++        2 -> 30_000L
++        else -> 60_000L
++    }
++
++    // Explicit type: the probe branch references this property from inside
++    // its own object-expression initializer (removeCallbacks/postDelayed on
++    // itself), which Kotlin's type inference rejects as recursive without it.
++    private val absErrRetryRunnable: Runnable = object : Runnable {
++        override fun run() {
++            if (!absErrRetryArmed || !::player.isInitialized) return
++            when (player.playerState) {
++                AudioPlayerState.ERROR -> {
++                    // Only a REAL attempt consumes a ladder rung — a tick that
++                    // merely observed an in-flight prepare must not push a
++                    // later genuine error out to the 30s/60s rungs.
++                    Timber.d("ABS error auto-retry attempt ${absErrRetryAttempt + 1}")
++                    try {
++                        player.prepare()
++                    } catch (t: Throwable) {
++                        // The whole point of this change is naming failures — a
++                        // retry that dies silently would hide why recovery
++                        // never lands.
++                        Timber.w(t, "ABS error auto-retry prepare failed (attempt ${absErrRetryAttempt + 1})")
++                    }
++                    absErrRetryAttempt += 1
++                    absErrRetrySchedule()
++                }
++                AudioPlayerState.LOADING, AudioPlayerState.BUFFERING -> {
++                    // A prepare is in flight: probe again shortly, rung intact.
++                    // It resolves to READY/PLAYING (stateChange disarms) or
++                    // falls back to ERROR (the next probe attempts for real).
++                    absErrRetryHandler.removeCallbacks(absErrRetryRunnable)
++                    absErrRetryHandler.postDelayed(absErrRetryRunnable, 5_000L)
++                }
++                else -> {
++                    // IDLE/STOPPED/ENDED (queue cleared, deliberate stop, book
++                    // finished) — recovery is moot; don't tick forever.
++                    absErrRetryDisarm()
++                }
++            }
++        }
++    }
++
++    private fun absErrRetrySchedule() {
++        absErrRetryHandler.removeCallbacks(absErrRetryRunnable)
++        absErrRetryHandler.postDelayed(absErrRetryRunnable, absErrRetryDelayMs(absErrRetryAttempt))
++    }
++
++    private fun absErrRetryArm() {
++        // A repeat error while armed keeps the ladder position — resetting to
++        // 2s on every failed attempt would hammer a dead source forever.
++        if (absErrRetryArmed) return
++        absErrRetryArmed = true
++        absErrRetryAttempt = 0
++        absErrRetrySchedule()
++    }
++
++    private fun absErrRetryDisarm() {
++        if (!absErrRetryArmed) return
++        absErrRetryArmed = false
++        absErrRetryAttempt = 0
++        absErrRetryHandler.removeCallbacks(absErrRetryRunnable)
++    }
++
+     private fun getPlaybackErrorBundle(): Bundle {
+         val bundle = Bundle()
+         val error = playbackError
+@@ -717,7 +2886,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2702,7 +2863,7 @@ index b495b5a..ee3046f 100644
              return
          }
  
-@@ -780,8 +2846,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2949,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2718,12 +2879,13 @@ index b495b5a..ee3046f 100644
          return mediaSession
      }
  
-@@ -792,13 +2864,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2967,50 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
 -        if (::player.isInitialized) {
 -            Timber.d("Releasing media session and destroying player")
++        absErrRetryDisarm()
 +        absCancelSleepTimer()
 +        // Release the LoudnessEnhancer + detach its session listener before the
 +        // player is destroyed below (the effect is bound to its audio session).
@@ -2770,7 +2932,7 @@ index b495b5a..ee3046f 100644
          super.onDestroy()
      }
  
-@@ -831,24 +2939,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +3043,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -2781,6 +2943,11 @@ index b495b5a..ee3046f 100644
 -
 -                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
 -                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
+-                    true
+-                }
+-
+-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+-                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
 -                    true
 +                // The car steering-wheel / console FF/RW / next+previous transport
 +                // keys seek by the user's configured jump increment, NOT to the
@@ -2812,11 +2979,6 @@ index b495b5a..ee3046f 100644
 +                    } else null
                  }
  
--                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
--                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
--                    true
--                }
--
 -                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
 -                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
 -                    true
@@ -2831,7 +2993,7 @@ index b495b5a..ee3046f 100644
                  }
  
                  else -> null
-@@ -886,6 +3014,20 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3118,20 @@ class MusicService : HeadlessJsMediaService() {
              val isMediaNotificationController = session.isMediaNotificationController(controller)
              val isAutomotiveController = session.isAutomotiveController(controller)
              val isAutoCompanionController = session.isAutoCompanionController(controller)
@@ -2852,7 +3014,7 @@ index b495b5a..ee3046f 100644
              emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
                  putString("package", controller.packageName)
                  putBoolean("isMediaNotificationController", isMediaNotificationController)
-@@ -905,24 +3047,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +3151,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -3113,7 +3275,7 @@ index b495b5a..ee3046f 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3292,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3396,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -3143,7 +3305,7 @@ index b495b5a..ee3046f 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3324,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3428,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3159,7 +3321,7 @@ index b495b5a..ee3046f 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3340,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3444,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
