@@ -487,7 +487,7 @@ index 13a6c60..249abb4 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..ba32f01 100644
+index b495b5a..50c22c8 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -2746,7 +2746,7 @@ index b495b5a..ba32f01 100644
                  if (it == AudioPlayerState.ENDED && player.nextItem == null) {
                      emitQueueEndedEvent()
                  }
-@@ -654,11 +2734,73 @@ class MusicService : HeadlessJsMediaService() {
+@@ -654,11 +2734,79 @@ class MusicService : HeadlessJsMediaService() {
  
          scope.launch {
              event.playbackError.collect {
@@ -2790,7 +2790,13 @@ index b495b5a..ba32f01 100644
 +            if (!absErrRetryArmed) return
 +            if (::player.isInitialized && player.playerState == AudioPlayerState.ERROR) {
 +                Timber.d("ABS error auto-retry attempt ${absErrRetryAttempt + 1}")
-+                try { player.prepare() } catch (_: Throwable) {}
++                try {
++                    player.prepare()
++                } catch (t: Throwable) {
++                    // The whole point of this PR is naming failures — a retry
++                    // that dies silently would hide why recovery never lands.
++                    Timber.w(t, "ABS error auto-retry prepare failed (attempt ${absErrRetryAttempt + 1})")
++                }
              }
 +            absErrRetryAttempt += 1
 +            absErrRetrySchedule()
@@ -2821,7 +2827,7 @@ index b495b5a..ba32f01 100644
      private fun getPlaybackErrorBundle(): Bundle {
          val bundle = Bundle()
          val error = playbackError
-@@ -717,7 +2859,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2865,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2830,7 +2836,7 @@ index b495b5a..ba32f01 100644
              return
          }
  
-@@ -780,8 +2922,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2928,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2846,7 +2852,7 @@ index b495b5a..ba32f01 100644
          return mediaSession
      }
  
-@@ -792,13 +2940,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2946,50 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2899,7 +2905,7 @@ index b495b5a..ba32f01 100644
          super.onDestroy()
      }
  
-@@ -831,24 +3016,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +3022,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -2960,7 +2966,7 @@ index b495b5a..ba32f01 100644
                  }
  
                  else -> null
-@@ -886,6 +3091,20 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3097,20 @@ class MusicService : HeadlessJsMediaService() {
              val isMediaNotificationController = session.isMediaNotificationController(controller)
              val isAutomotiveController = session.isAutomotiveController(controller)
              val isAutoCompanionController = session.isAutoCompanionController(controller)
@@ -2981,7 +2987,7 @@ index b495b5a..ba32f01 100644
              emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
                  putString("package", controller.packageName)
                  putBoolean("isMediaNotificationController", isMediaNotificationController)
-@@ -905,24 +3124,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +3130,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -3138,7 +3144,7 @@ index b495b5a..ba32f01 100644
 +                } finally {
 +                    future.set(LibraryResult.ofVoid(params))
 +                }
-             }
++            }
 +            return future
 +        }
 +
@@ -3237,12 +3243,12 @@ index b495b5a..ba32f01 100644
 +                    } else item
 +                }.toMutableList()
 +                future.set(resolved)
-+            }
+             }
 +            return future
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3369,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3375,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -3272,7 +3278,7 @@ index b495b5a..ba32f01 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3401,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3407,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3288,7 +3294,7 @@ index b495b5a..ba32f01 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3417,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3423,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
