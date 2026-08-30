@@ -1575,8 +1575,14 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
       st.chapterQueue && st.chapters.length
         ? chapterIndexAt(st.chapters, st.position) + 1
         : 0;
+    // The native emit now carries code + cause-chain message; if an event
+    // still arrives bare, log whatever shape it had instead of "unknown" —
+    // an unexpected payload is itself the diagnostic.
+    const errDetail =
+      e?.message ||
+      (e && Object.keys(e).length ? JSON.stringify(e).slice(0, 300) : "no detail from player");
     appLogger.error(
-      `Player error${e?.code ? ` [${e.code}]` : ""}: ${e?.message || "unknown"} ` +
+      `Player error${e?.code ? ` [${e.code}]` : ""}: ${errDetail} ` +
         `(pos ${Math.round(st.position)}s${ch ? `, ch ${ch}/${st.chapters.length}` : ""}, ` +
         `${_queueSource || "unknown"} queue, app ${AppState.currentState}, ` +
         `${wasPlaying ? "was playing" : "was paused"})`,
