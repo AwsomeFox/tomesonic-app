@@ -596,7 +596,41 @@ export async function updateTrackMetadataBatch(
   }
 }
 
-async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
+// `nextItemHot` — ExoPlayer is already loading the NEXT queue item (the
+// current clipped/file item is buffered to its end). The look-ahead artwork
+// stamp REPLACES that next item (replaceMediaItems recreates a non-current
+// item's media source), which throws away everything prebuffered for it: a
+// re-load over a slow link stalls the next chapter boundary for seconds to
+// minutes, and over a background-denied link it DIES there — the reported
+// "pauses at the end of every chapter". Short chapters (< the ~300s buffer
+// window) hit this on every prompt tick; long chapters hit it when a
+// background-throttled tick lands late in the chapter. When hot, skip the
+// look-ahead: the post-transition stamp of the newly-active item (a seamless
+// in-place update of the CURRENT item) restores the artwork a tick later —
+// a cosmetic flap instead of a dead boundary.
+// Out-of-tick metadata pushes (car connect, a late-cached cover) compute the
+// same next-item-prebuffering gate the progress tick derives from the
+// progress it already holds.
+async function isNextItemHot(): Promise<boolean> {
+  try {
+    // While casting the LOCAL player sits paused with nothing prebuffering —
+    // and the cast contract is that local player state is never even read
+    // (the receiver is the only truth). Replacing a paused player's items
+    // discards nothing being played.
+    if (usePlaybackStore.getState().isCasting) return false;
+    const p = await TrackPlayer.getProgress();
+    return p.duration > 0 && p.buffered > 0 && p.duration - p.buffered < 12;
+  } catch {
+    return false;
+  }
+}
+
+async function applyNowPlayingChapter(
+  session: any,
+  chapters: any[],
+  chapterIndex: number,
+  nextItemHot = false
+) {
   if (!session) return;
   try {
     const st = usePlaybackStore.getState();
@@ -693,7 +727,8 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     // already looks right — no tiny→large artwork flap, and (chapter queues)
     // no post-transition rewrite of the newly-active item at all.
     const nextIndex = activeIndex + 1;
-    const lookAhead = !compat && !casting && !!localArt && nextIndex < queueLen;
+    const lookAhead =
+      !compat && !casting && !!localArt && nextIndex < queueLen && !nextItemHot;
     if (lookAhead && (nextIndex !== _metaNextIndex || artworkChanged)) {
       const nextMeta: any = {
         title: isChapterQueue ? chapters?.[nextIndex]?.title || book : book,
@@ -1012,6 +1047,13 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
     if (!s || (s.libraryItemId || s.libraryItem?.id) !== itemId) return;
     if (s.carArtworkLocal === path) return;
     usePlaybackStore.setState({ currentSession: { ...s, carArtworkLocal: path } });
+    // A car UI is already connected but this (streamed) book's cover only just
+    // landed in the cache: the queue was built without the tiny per-row bytes
+    // and the one-shot car-connect restamp has already run, so without this
+    // stamp the Android Auto queue rows stay artless for the whole session.
+    if (_carUiSeen) {
+      await stampCarRowIcons(path).catch(() => {});
+    }
     // Push the new (local) artwork onto the ACTIVE track now instead of waiting
     // for the next tick. applyNowPlayingChapter stamps the bytes onto the active
     // item (and the tick will keep moving them as chapters advance) for both
@@ -1021,7 +1063,8 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
     await applyNowPlayingChapter(
       usePlaybackStore.getState().currentSession,
       st.chapters,
-      usePlaybackStore.getState().currentChapterIndex
+      usePlaybackStore.getState().currentChapterIndex,
+      await isNextItemHot()
     );
   } catch {}
 }
@@ -1035,7 +1078,36 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
 // the tiny tier onto the first MAX_CAR_TILE_ITEMS items now (one contiguous
 // batch = one native timeline update, at the exact moment Android Auto is
 // fetching everything anyway) and re-apply the active item's large bytes.
+// A car UI has connected at least once this JS lifetime — mirrors the native
+// AudioItem.carControllerSeen latch. Lets the late-cover path (a STREAMED
+// book's cover cache lands seconds AFTER prepare) know the queue rows need
+// the tiny tier stamped: the one-shot connect restamp below has already run
+// by then, so without this a streamed book started in (or before) the car
+// kept artless Android Auto queue rows for the whole session.
+let _carUiSeen = false;
+
+// Stamp the TINY per-row cover bytes onto the first MAX_CAR_TILE_ITEMS queue
+// rows (one contiguous batch = one native timeline update). The native
+// setMetadata is replacement-style for the standard fields — a bundle
+// carrying only localArtworkSmall would null the row's title/artist/mediaId
+// — so each row's existing metadata is echoed back alongside the bytes.
+async function stampCarRowIcons(localArt: string) {
+  const queue = await TrackPlayer.getQueue();
+  if ((queue?.length || 0) > 1) {
+    const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
+    const updates = [];
+    for (let i = 0; i < n; i++) {
+      updates.push({
+        index: i,
+        metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
+      });
+    }
+    await updateTrackMetadataBatch(updates);
+  }
+}
+
 export async function onCarControllerConnected() {
+  _carUiSeen = true;
   const st = usePlaybackStore.getState();
   const s = st.currentSession;
   if (!s) return;
@@ -1044,22 +1116,7 @@ export async function onCarControllerConnected() {
       s.carArtworkLocal ||
       (s.coverUrl && !s.coverUrl.startsWith("http") ? s.coverUrl : undefined);
     if (localArt) {
-      const queue = await TrackPlayer.getQueue();
-      if ((queue?.length || 0) > 1) {
-        const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
-        const updates = [];
-        for (let i = 0; i < n; i++) {
-          // The native setMetadata is replacement-style for the standard
-          // fields — a bundle carrying only localArtworkSmall would null the
-          // row's title/artist/mediaId — so echo the row's existing metadata
-          // back alongside the added tiny-artwork path.
-          updates.push({
-            index: i,
-            metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
-          });
-        }
-        await updateTrackMetadataBatch(updates);
-      }
+      await stampCarRowIcons(localArt);
     }
     // Force the next now-playing application through (it re-stamps the active
     // item's LARGE bytes + look-ahead window under the now-latched car flag).
@@ -1067,7 +1124,8 @@ export async function onCarControllerConnected() {
     await applyNowPlayingChapter(
       usePlaybackStore.getState().currentSession,
       st.chapters,
-      st.currentChapterIndex
+      st.currentChapterIndex,
+      await isNextItemHot()
     );
   } catch {}
 }
@@ -2314,7 +2372,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             // only to stay under Android Auto's Binder limit. Both are deduped
             // by _lastMetaChapter so this only does native work on a real
             // chapter change.
-            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
+            // Buffered topping out at the item's end means the NEXT item's
+            // prebuffer is underway — the look-ahead stamp must not touch it
+            // (see applyNowPlayingChapter's nextItemHot).
+            const nextItemHot =
+              progress.duration > 0 &&
+              progress.buffered > 0 &&
+              progress.duration - progress.buffered < 12;
+            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex, nextItemHot);
           }
 
           if (get().currentSession !== tickSession) return;
