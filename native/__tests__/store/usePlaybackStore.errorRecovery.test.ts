@@ -332,6 +332,62 @@ describe("usePlaybackStore playback-error recovery", () => {
     });
   });
 
+  describe("attempt counting (executed timers only)", () => {
+    it("a foreground recovery consuming the unfired 2s timer neither eats the rung nor counts an attempt", async () => {
+      // attempts must count EXECUTED timed attempts: incrementing at
+      // schedule-time made an early foreground recovery (a) log a timed
+      // attempt that never ran and (b) skip the 2s rung after a failed
+      // foreground try.
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry.mockRejectedValueOnce(new Error("blocked")).mockResolvedValue(undefined);
+
+      onPlaybackError({ message: "boom" });
+      // Foreground recovery lands BEFORE the 2s timer fires — and fails.
+      await recoverPlaybackIfNeeded("foreground");
+      expect(mockRetry).toHaveBeenCalledTimes(1);
+      // The 2s rung was NOT consumed by the cancelled timer: the failed
+      // foreground attempt re-armed it, so the next timed try is 2s out.
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(mockRetry).toHaveBeenCalledTimes(2);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      // That success executed exactly ONE timed attempt — the log says so.
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "INFO" &&
+              l.tag === "Playback" &&
+              /recovered via timer after 1 timed attempt/.test(l.message)
+          )
+      ).toBe(true);
+    });
+
+    it("a foreground recovery succeeding before any timer fired reports 0 timed attempts", async () => {
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+
+      onPlaybackError({ message: "boom" });
+      await recoverPlaybackIfNeeded("foreground");
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "INFO" &&
+              l.tag === "Playback" &&
+              /recovered via foreground after 0 timed attempt/.test(l.message)
+          )
+      ).toBe(true);
+    });
+  });
+
   describe("field diagnostics (Settings → Logs)", () => {
     it("logs the error with context, each failed attempt, and the recovery outcome", async () => {
       // The chapter-boundary reports could never tell us WHICH error the

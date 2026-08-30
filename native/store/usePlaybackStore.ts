@@ -1476,10 +1476,17 @@ function clearErrorRecovery() {
 
 function scheduleErrorRetry() {
   if (!_errorRecovery) return;
-  const attempt = _errorRecovery.attempts++;
+  // PEEK here, increment in the callback: attempts counts EXECUTED timed
+  // attempts. A foreground/connectivity/manual recovery that consumes a
+  // scheduled-but-unfired timer must neither eat a fast rung (its own
+  // failure re-arms the SAME rung) nor inflate the "timed attempt(s)" count
+  // the recovery log reports.
+  const attempt = _errorRecovery.attempts;
   const delay =
     attempt < ERROR_RETRY_DELAYS_MS.length ? ERROR_RETRY_DELAYS_MS[attempt] : ERROR_RETRY_SLOW_MS;
   _errorRecovery.timer = setTimeout(() => {
+    if (!_errorRecovery) return;
+    _errorRecovery.attempts++;
     recoverPlaybackIfNeeded("timer").catch(() => {});
   }, delay);
 }
