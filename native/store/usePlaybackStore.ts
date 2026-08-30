@@ -98,6 +98,23 @@ const PAUSE_STRAGGLER_WINDOW_MS = 2000;
 // Rows past the cap show text only (rare — most books are well under 64
 // chapters/files).
 export const MAX_CAR_TILE_ITEMS = 64;
+
+// Longest single-file book that still gets the chapter-per-item queue. Each
+// clipped queue item is its own media3 MediaSource with its OWN extractor,
+// and preparing one re-parses the ENTIRE file's moov sample table into Java
+// arrays that scale with runtime — a 28.5h m4b is ~4.4M samples, a single
+// ~34MB long[] per parse, with the outgoing and incoming items' copies live
+// together at every chapter boundary. The field failure this caps: hours
+// into a long book the heap creeps to its limit and the NEXT boundary's
+// table allocation throws OutOfMemoryError — "Source error", playback dead
+// at exactly a chapter end (worst in the background, where nothing trims
+// caches). Books over the cap prepare as a FLAT single-item queue instead:
+// chapter titles, navigation and seeks all still work (they run on
+// `chapters` + absolute positions — the single-item paths downstream), and
+// only Android Auto's per-chapter queue rows are traded away. At 10h the
+// whole-file table is ~12MB/copy — comfortably inside even the default
+// heap, and far below it with largeHeap on.
+export const CHAPTER_QUEUE_MAX_SECONDS = 10 * 3600;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -2793,7 +2810,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // a plain music app, which those head units handle fine. Frozen into
       // carCompatActive for this session below.
       const carCompat = !!useUserStore.getState().settings.carCompatibilityMode;
-      const chapterQueue = chapters.length > 1 && audioTracks.length === 1 && !carCompat;
+      // Duration cap: a VERY long single file must not become 100+ clipped
+      // items — every item prepare re-parses the whole file's ~tens-of-MB
+      // sample table and long sessions OOM at a chapter boundary (see
+      // CHAPTER_QUEUE_MAX_SECONDS). Over the cap the book plays as one item;
+      // chapter UX still runs on `chapters` + absolute positions.
+      const bookSeconds = Number(session.duration) || 0;
+      const chapterQueue =
+        chapters.length > 1 &&
+        audioTracks.length === 1 &&
+        !carCompat &&
+        bookSeconds <= CHAPTER_QUEUE_MAX_SECONDS;
 
       // LOUD local-fallback: a book with a COMPLETED download record whose
       // track can't resolve to a local file used to stream in total silence —

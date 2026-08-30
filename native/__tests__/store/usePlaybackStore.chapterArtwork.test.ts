@@ -41,6 +41,7 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import {
   usePlaybackStore,
   MAX_CAR_TILE_ITEMS,
+  CHAPTER_QUEUE_MAX_SECONDS,
   onCarControllerConnected,
 } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -303,6 +304,65 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
       0,
       expect.objectContaining({ artwork: freshUrl })
     );
+  });
+
+  it("prepares a VERY long single-file book as ONE flat item (OOM guard), keeping chapters for the UI", async () => {
+    // Each clipped item's prepare re-parses the whole file's moov sample
+    // table (~34MB of arrays for a 28.5h m4b) — hours into a long book the
+    // heap creeps to its cap and a chapter boundary dies with
+    // OutOfMemoryError ("Source error"). Over the duration cap the book
+    // plays as a single item; chapter UX runs on `chapters` + positions.
+    const total = CHAPTER_QUEUE_MAX_SECONDS + 3600; // one hour over the cap
+    const bigChapters = Array.from({ length: 40 }, (_, i) => ({
+      id: i,
+      title: `Chapter ${i + 1}`,
+      start: (i * total) / 40,
+      end: ((i + 1) * total) / 40,
+    }));
+    useDownloadStore.setState({ completedDownloads: {} });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sessBig",
+        libraryItemId: "item1",
+        displayTitle: "The Monster Book",
+        displayAuthor: "Tolkien",
+        duration: total,
+        currentTime: 0,
+        chapters: bigChapters,
+        audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: total, startOffset: 0 }],
+      },
+      false
+    );
+    expect(usePlaybackStore.getState().chapterQueue).toBe(false);
+    expect(addedTracks()).toHaveLength(1);
+    // The chapter UX still has its data.
+    expect(usePlaybackStore.getState().chapters).toHaveLength(40);
+  });
+
+  it("keeps the chapter queue for a book exactly AT the duration cap", async () => {
+    const total = CHAPTER_QUEUE_MAX_SECONDS;
+    const chapters = Array.from({ length: 10 }, (_, i) => ({
+      id: i,
+      title: `Chapter ${i + 1}`,
+      start: (i * total) / 10,
+      end: ((i + 1) * total) / 10,
+    }));
+    useDownloadStore.setState({ completedDownloads: {} });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sessCap",
+        libraryItemId: "item1",
+        displayTitle: "The Cap Book",
+        displayAuthor: "Tolkien",
+        duration: total,
+        currentTime: 0,
+        chapters,
+        audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: total, startOffset: 0 }],
+      },
+      false
+    );
+    expect(usePlaybackStore.getState().chapterQueue).toBe(true);
+    expect(addedTracks()).toHaveLength(10);
   });
 
   it("SKIPS the look-ahead pre-stamp while the next item is already prebuffering (boundary safety)", async () => {

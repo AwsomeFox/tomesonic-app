@@ -48,6 +48,7 @@
           }
         }
       ],
+      "./plugins/withLargeHeap",
       "./plugins/withCastSingleNotification",
       "./plugins/withUploadSigning",
       "./plugins/withAutoBrowseIcons",
