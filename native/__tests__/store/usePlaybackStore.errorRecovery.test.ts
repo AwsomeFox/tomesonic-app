@@ -179,8 +179,14 @@ describe("usePlaybackStore playback-error recovery", () => {
     });
   });
 
-  describe("bounded backoff", () => {
-    it("retries at 2s/10s/30s while the network is still down, then stops", async () => {
+  describe("backoff ladder with slow tail", () => {
+    it("retries at 2s/10s/30s, then keeps trying at a slow 60s cadence indefinitely", async () => {
+      // The field case: backgrounded by another app, a streamed chapter queue
+      // dies at the clip boundary (the OS denied the backgrounded app's
+      // network). The old bounded ladder burned its three rungs into the
+      // denial and playback then stayed dead until the user foregrounded the
+      // app. The slow tail keeps a wedged-but-wanted session retrying for as
+      // long as it stays loaded.
       await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
       mockState.mockResolvedValue({ state: "error" } as any);
       mockRetry.mockRejectedValue(new Error("still offline"));
@@ -192,10 +198,37 @@ describe("usePlaybackStore playback-error recovery", () => {
       expect(mockRetry).toHaveBeenCalledTimes(2);
       await jest.advanceTimersByTimeAsync(30000);
       expect(mockRetry).toHaveBeenCalledTimes(3);
-      // Bounded: no fourth automatic attempt, ever.
+      // Slow tail: one attempt per minute, forever.
+      await jest.advanceTimersByTimeAsync(60000);
+      expect(mockRetry).toHaveBeenCalledTimes(4);
+      await jest.advanceTimersByTimeAsync(60000);
+      expect(mockRetry).toHaveBeenCalledTimes(5);
       await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
-      expect(mockRetry).toHaveBeenCalledTimes(3);
+      expect(mockRetry).toHaveBeenCalledTimes(15);
       expect(usePlaybackStore.getState().isPlaying).toBe(false);
+    });
+
+    it("a slow-tail attempt succeeding resumes playback by itself", async () => {
+      // The wedge self-heals the moment the OS lets the network through
+      // again — no foregrounding required.
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockResolvedValue(undefined);
+
+      onPlaybackError({ message: "boom" });
+      await jest.advanceTimersByTimeAsync(2000 + 10000 + 30000 + 60000); // 4 failures
+      expect(mockRetry).toHaveBeenCalledTimes(4);
+      expect(usePlaybackStore.getState().isPlaying).toBe(false);
+      mockPlay.mockClear();
+      await jest.advanceTimersByTimeAsync(60000); // 5th attempt succeeds
+      expect(mockRetry).toHaveBeenCalledTimes(5);
+      expect(mockPlay).toHaveBeenCalled();
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
     });
 
     it("a later attempt succeeding resumes playback", async () => {
@@ -296,6 +329,141 @@ describe("usePlaybackStore playback-error recovery", () => {
       await usePlaybackStore.getState().closePlayback();
       await jest.advanceTimersByTimeAsync(60000);
       expect(mockRetry).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("attempt counting (executed timers only)", () => {
+    it("a foreground recovery consuming the unfired 2s timer neither eats the rung nor counts an attempt", async () => {
+      // attempts must count EXECUTED timed attempts: incrementing at
+      // schedule-time made an early foreground recovery (a) log a timed
+      // attempt that never ran and (b) skip the 2s rung after a failed
+      // foreground try.
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry.mockRejectedValueOnce(new Error("blocked")).mockResolvedValue(undefined);
+
+      onPlaybackError({ message: "boom" });
+      // Foreground recovery lands BEFORE the 2s timer fires — and fails.
+      await recoverPlaybackIfNeeded("foreground");
+      expect(mockRetry).toHaveBeenCalledTimes(1);
+      // The 2s rung was NOT consumed by the cancelled timer: the failed
+      // foreground attempt re-armed it, so the next timed try is 2s out.
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(mockRetry).toHaveBeenCalledTimes(2);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      // That success executed exactly ONE timed attempt — the log says so.
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "INFO" &&
+              l.tag === "Playback" &&
+              /recovered via timer after 1 timed attempt/.test(l.message)
+          )
+      ).toBe(true);
+    });
+
+    it("overlapping failed recoveries leave exactly ONE armed timer (no leak, no retry storm)", async () => {
+      // Foreground, connectivity, and a just-fired timer genuinely coincide
+      // on an app resume. When two overlapping failures each scheduled, the
+      // second's overwrite leaked the first, still-armed timeout — every
+      // overlap added a live timer and the slow tail became a retry storm.
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockResolvedValue(undefined);
+
+      onPlaybackError({ message: "boom" });
+      // Two recoveries in flight together, both failing — each re-arms, and
+      // the second arm must replace (not leak) the first.
+      await Promise.all([
+        recoverPlaybackIfNeeded("foreground"),
+        recoverPlaybackIfNeeded("connectivity"),
+      ]);
+      expect(mockRetry).toHaveBeenCalledTimes(2);
+      // Exactly ONE timer survives: the 2s rung fires once and succeeds.
+      mockPlay.mockClear();
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(mockRetry).toHaveBeenCalledTimes(3);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      // No leaked second timer fires later.
+      await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(mockRetry).toHaveBeenCalledTimes(3);
+    });
+
+    it("a foreground recovery succeeding before any timer fired reports 0 timed attempts", async () => {
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+
+      onPlaybackError({ message: "boom" });
+      await recoverPlaybackIfNeeded("foreground");
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "INFO" &&
+              l.tag === "Playback" &&
+              /recovered via foreground after 0 timed attempt/.test(l.message)
+          )
+      ).toBe(true);
+    });
+  });
+
+  describe("field diagnostics (Settings → Logs)", () => {
+    it("logs the error with context, each failed attempt, and the recovery outcome", async () => {
+      // The chapter-boundary reports could never tell us WHICH error the
+      // player hit — console.warn only reaches adb. These entries make any
+      // user's Logs screen name the error code, position, queue source
+      // (stream vs local), and app state, plus which signal recovered it.
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      usePlaybackStore.setState({ position: 42 });
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry.mockRejectedValueOnce(new Error("blocked")).mockResolvedValue(undefined);
+
+      onPlaybackError({ code: "android-io-network-connection-failed", message: "net down" });
+      const err = appLogger
+        .getLogs()
+        .find((l: any) => l.level === "ERROR" && l.tag === "Playback");
+      expect(err).toBeTruthy();
+      expect(err!.message).toContain("android-io-network-connection-failed");
+      expect(err!.message).toContain("pos 42s");
+      expect(err!.message).toContain("stream queue");
+      expect(err!.message).toContain("was playing");
+
+      await jest.advanceTimersByTimeAsync(2000); // first attempt fails
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "WARN" &&
+              l.tag === "Playback" &&
+              /Recovery attempt \(timer\) failed/.test(l.message)
+          )
+      ).toBe(true);
+
+      await jest.advanceTimersByTimeAsync(10000); // second attempt succeeds
+      expect(
+        appLogger
+          .getLogs()
+          .some(
+            (l: any) =>
+              l.level === "INFO" &&
+              l.tag === "Playback" &&
+              /recovered via timer/.test(l.message)
+          )
+      ).toBe(true);
     });
   });
 

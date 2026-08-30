@@ -305,6 +305,96 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     );
   });
 
+  it("SKIPS the look-ahead pre-stamp while the next item is already prebuffering (boundary safety)", async () => {
+    // Buffered topping out at the clipped item's end means ExoPlayer is
+    // loading the NEXT chapter. Replacing that item (the look-ahead stamp
+    // goes through replaceMediaItems) recreates its media source and throws
+    // the prebuffer away — a re-load over a slow link stalls the boundary,
+    // over a background-denied one it dies there ("pauses at the end of
+    // every chapter"). Short chapters are hot on every tick; long chapters
+    // go hot when a background-throttled tick lands late in the chapter.
+    await prepareChapterBook();
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+    usePlaybackStore.setState({ isPlaying: true });
+
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+    jest
+      .mocked(TrackPlayer.getProgress)
+      .mockResolvedValue({ position: 90, duration: 100, buffered: 95 } as any);
+    await jest.advanceTimersByTimeAsync(1000);
+
+    // The ACTIVE item still gets its bytes — updating the CURRENT item is a
+    // seamless in-place metadata change.
+    expect(TrackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ localArtwork: COVER })
+    );
+    // The hot NEXT item is left completely untouched.
+    const touchedNext = jest
+      .mocked(TrackPlayer.updateMetadataForTrack)
+      .mock.calls.some((c) => c[0] === 1);
+    expect(touchedNext).toBe(false);
+  });
+
+  it("slides the window WITHOUT touching the upcoming item when it is hot at the boundary tick", async () => {
+    await prepareChapterBook();
+    usePlaybackStore.setState({ isPlaying: true });
+
+    // Safe tick on chapter 0: window becomes {0 active, 1 pre-stamped}.
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+    await jest.advanceTimersByTimeAsync(1000);
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+
+    // Chapter change lands on a HOT tick (buffered at the clip end).
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+    jest
+      .mocked(TrackPlayer.getProgress)
+      .mockResolvedValue({ position: 5, duration: 100, buffered: 100 } as any);
+    await jest.advanceTimersByTimeAsync(1000);
+
+    const calls = jest.mocked(TrackPlayer.updateMetadataForTrack).mock.calls;
+    // Old item stripped, new active untouched (pre-stamped last tick) — and
+    // the hot upcoming chapter 2 is NOT pre-stamped.
+    const clear = calls.find((c) => c[0] === 0);
+    expect(clear).toBeDefined();
+    expect((clear![1] as any).localArtwork).toBe("");
+    expect(calls.find((c) => c[0] === 1)).toBeUndefined();
+    expect(calls.find((c) => c[0] === 2)).toBeUndefined();
+  });
+
+  it("stamps the tiny row tier when a STREAMED book's cover lands after the car connected", async () => {
+    // A streamed book has no local cover at prepare — carArtworkLocal arrives
+    // seconds later from the cover cache. The one-shot car-connect restamp has
+    // already run by then, so the late-cover path must stamp the row tier
+    // itself or Android Auto's queue rows stay artless for the whole session.
+    useDownloadStore.setState({ completedDownloads: {} });
+    await onCarControllerConnected(); // car seen before any session exists
+
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sess1",
+        libraryItemId: "item1",
+        displayTitle: "The Hobbit",
+        displayAuthor: "Tolkien",
+        duration: 300,
+        currentTime: 0,
+        chapters: CHAPTERS,
+        audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: 300, startOffset: 0 }],
+      },
+      false
+    );
+    jest.mocked(TrackPlayer.getQueue).mockResolvedValue(addedTracks() as any);
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+
+    // Let the fire-and-forget cover cache (downloadAsync default: 200) land.
+    await jest.advanceTimersByTimeAsync(50);
+
+    const rowStamps = jest
+      .mocked(TrackPlayer.updateMetadataForTrack)
+      .mock.calls.filter((c) => typeof (c[1] as any).localArtworkSmall === "string" && (c[1] as any).localArtworkSmall.length > 0);
+    expect(rowStamps.map((c) => c[0])).toEqual([0, 1, 2]);
+  });
+
   it("car-connect restamp PRESERVES each row's existing metadata alongside the tiny bytes", async () => {
     // The native setMetadata is replacement-style for the standard fields: a
     // restamp bundle carrying ONLY localArtworkSmall would null every row's

@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import { AppState } from "react-native";
 import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react-native-track-player";
+import { appLogger } from "../utils/logger";
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
@@ -18,6 +20,13 @@ let _lastPausedAt: number | null = null;
 // Token the current queue's stream URLs were built with (see prepare) — lets
 // error recovery detect a rotation and rebuild URLs instead of retrying 401s.
 let _preparedToken: string | null = null;
+// How the CURRENT queue's track URLs resolved (local files vs streamed) —
+// context for the playback-error log lines in Settings → Logs. "stream" at a
+// chapter edge with the app backgrounded is the boundary-death fingerprint
+// (the clip buffer legally ends at the boundary; the next item's first load
+// needs network the OS may deny a backgrounded app); "local" errors point
+// somewhere else entirely.
+let _queueSource: "local" | "stream" | "mixed" | null = null;
 
 // --- Server progress sync bookkeeping (module-level, one active session at a time) ---
 // Seconds of actual listening accumulated since the last successful/queued sync.
@@ -587,7 +596,41 @@ export async function updateTrackMetadataBatch(
   }
 }
 
-async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
+// `nextItemHot` — ExoPlayer is already loading the NEXT queue item (the
+// current clipped/file item is buffered to its end). The look-ahead artwork
+// stamp REPLACES that next item (replaceMediaItems recreates a non-current
+// item's media source), which throws away everything prebuffered for it: a
+// re-load over a slow link stalls the next chapter boundary for seconds to
+// minutes, and over a background-denied link it DIES there — the reported
+// "pauses at the end of every chapter". Short chapters (< the ~300s buffer
+// window) hit this on every prompt tick; long chapters hit it when a
+// background-throttled tick lands late in the chapter. When hot, skip the
+// look-ahead: the post-transition stamp of the newly-active item (a seamless
+// in-place update of the CURRENT item) restores the artwork a tick later —
+// a cosmetic flap instead of a dead boundary.
+// Out-of-tick metadata pushes (car connect, a late-cached cover) compute the
+// same next-item-prebuffering gate the progress tick derives from the
+// progress it already holds.
+async function isNextItemHot(): Promise<boolean> {
+  try {
+    // While casting the LOCAL player sits paused with nothing prebuffering —
+    // and the cast contract is that local player state is never even read
+    // (the receiver is the only truth). Replacing a paused player's items
+    // discards nothing being played.
+    if (usePlaybackStore.getState().isCasting) return false;
+    const p = await TrackPlayer.getProgress();
+    return p.duration > 0 && p.buffered > 0 && p.duration - p.buffered < 12;
+  } catch {
+    return false;
+  }
+}
+
+async function applyNowPlayingChapter(
+  session: any,
+  chapters: any[],
+  chapterIndex: number,
+  nextItemHot = false
+) {
   if (!session) return;
   try {
     const st = usePlaybackStore.getState();
@@ -684,7 +727,8 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     // already looks right — no tiny→large artwork flap, and (chapter queues)
     // no post-transition rewrite of the newly-active item at all.
     const nextIndex = activeIndex + 1;
-    const lookAhead = !compat && !casting && !!localArt && nextIndex < queueLen;
+    const lookAhead =
+      !compat && !casting && !!localArt && nextIndex < queueLen && !nextItemHot;
     if (lookAhead && (nextIndex !== _metaNextIndex || artworkChanged)) {
       const nextMeta: any = {
         title: isChapterQueue ? chapters?.[nextIndex]?.title || book : book,
@@ -1003,6 +1047,13 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
     if (!s || (s.libraryItemId || s.libraryItem?.id) !== itemId) return;
     if (s.carArtworkLocal === path) return;
     usePlaybackStore.setState({ currentSession: { ...s, carArtworkLocal: path } });
+    // A car UI is already connected but this (streamed) book's cover only just
+    // landed in the cache: the queue was built without the tiny per-row bytes
+    // and the one-shot car-connect restamp has already run, so without this
+    // stamp the Android Auto queue rows stay artless for the whole session.
+    if (_carUiSeen) {
+      await stampCarRowIcons(path).catch(() => {});
+    }
     // Push the new (local) artwork onto the ACTIVE track now instead of waiting
     // for the next tick. applyNowPlayingChapter stamps the bytes onto the active
     // item (and the tick will keep moving them as chapters advance) for both
@@ -1012,7 +1063,8 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
     await applyNowPlayingChapter(
       usePlaybackStore.getState().currentSession,
       st.chapters,
-      usePlaybackStore.getState().currentChapterIndex
+      usePlaybackStore.getState().currentChapterIndex,
+      await isNextItemHot()
     );
   } catch {}
 }
@@ -1026,7 +1078,36 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
 // the tiny tier onto the first MAX_CAR_TILE_ITEMS items now (one contiguous
 // batch = one native timeline update, at the exact moment Android Auto is
 // fetching everything anyway) and re-apply the active item's large bytes.
+// A car UI has connected at least once this JS lifetime — mirrors the native
+// AudioItem.carControllerSeen latch. Lets the late-cover path (a STREAMED
+// book's cover cache lands seconds AFTER prepare) know the queue rows need
+// the tiny tier stamped: the one-shot connect restamp below has already run
+// by then, so without this a streamed book started in (or before) the car
+// kept artless Android Auto queue rows for the whole session.
+let _carUiSeen = false;
+
+// Stamp the TINY per-row cover bytes onto the first MAX_CAR_TILE_ITEMS queue
+// rows (one contiguous batch = one native timeline update). The native
+// setMetadata is replacement-style for the standard fields — a bundle
+// carrying only localArtworkSmall would null the row's title/artist/mediaId
+// — so each row's existing metadata is echoed back alongside the bytes.
+async function stampCarRowIcons(localArt: string) {
+  const queue = await TrackPlayer.getQueue();
+  if ((queue?.length || 0) > 1) {
+    const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
+    const updates = [];
+    for (let i = 0; i < n; i++) {
+      updates.push({
+        index: i,
+        metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
+      });
+    }
+    await updateTrackMetadataBatch(updates);
+  }
+}
+
 export async function onCarControllerConnected() {
+  _carUiSeen = true;
   const st = usePlaybackStore.getState();
   const s = st.currentSession;
   if (!s) return;
@@ -1035,22 +1116,7 @@ export async function onCarControllerConnected() {
       s.carArtworkLocal ||
       (s.coverUrl && !s.coverUrl.startsWith("http") ? s.coverUrl : undefined);
     if (localArt) {
-      const queue = await TrackPlayer.getQueue();
-      if ((queue?.length || 0) > 1) {
-        const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
-        const updates = [];
-        for (let i = 0; i < n; i++) {
-          // The native setMetadata is replacement-style for the standard
-          // fields — a bundle carrying only localArtworkSmall would null the
-          // row's title/artist/mediaId — so echo the row's existing metadata
-          // back alongside the added tiny-artwork path.
-          updates.push({
-            index: i,
-            metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
-          });
-        }
-        await updateTrackMetadataBatch(updates);
-      }
+      await stampCarRowIcons(localArt);
     }
     // Force the next now-playing application through (it re-stamps the active
     // item's LARGE bytes + look-ahead window under the now-latched car flag).
@@ -1058,7 +1124,8 @@ export async function onCarControllerConnected() {
     await applyNowPlayingChapter(
       usePlaybackStore.getState().currentSession,
       st.chapters,
-      st.currentChapterIndex
+      st.currentChapterIndex,
+      await isNextItemHot()
     );
   } catch {}
 }
@@ -1442,6 +1509,18 @@ function saveSessionPositionNow(position: number) {
 // regained also funnel into recoverPlaybackIfNeeded, since background JS
 // timers are throttled and may fire late.
 const ERROR_RETRY_DELAYS_MS = [2000, 10000, 30000];
+// After the bounded ladder, a SLOW indefinite tail. The field case that
+// forced it: app backgrounded by another app, a STREAMED chapter queue dies
+// exactly at the clip boundary (the buffer legally ends at the clip; the
+// next item's first load needs network the OS can deny a backgrounded app)
+// — the three rungs burned out while the denial persisted, and playback then
+// stayed dead until the user happened to foreground the app (whose recovery
+// hook fixed it instantly). The tail keeps trying for as long as the wedged
+// session stays loaded: recoverPlaybackIfNeeded stands down by itself when
+// the player is healthy, and prepare/close/manual-play all clear the
+// recovery state, so the only thing an extra attempt can do is bring a
+// dead-but-wanted stream back. One player-state read + retry per minute.
+const ERROR_RETRY_SLOW_MS = 60_000;
 let _errorRecovery: {
   resume: boolean; // was playback active when the error hit?
   attempts: number;
@@ -1455,12 +1534,25 @@ function clearErrorRecovery() {
 
 function scheduleErrorRetry() {
   if (!_errorRecovery) return;
-  // Out of automatic attempts — a manual play (see play()) or a
-  // foreground/connectivity recover call can still finish the job.
-  if (_errorRecovery.attempts >= ERROR_RETRY_DELAYS_MS.length) return;
-  const delay = ERROR_RETRY_DELAYS_MS[_errorRecovery.attempts++];
+  // ONE armed timer per recovery state. Recoveries can genuinely overlap —
+  // foreground, connectivity and a just-fired timer all land together on an
+  // app resume — and when two overlapping failures each scheduled, the
+  // second's overwrite LEAKED the first, still-armed timeout: every overlap
+  // added a live timer (a growing retry storm on the slow cadence).
+  if (_errorRecovery.timer) clearTimeout(_errorRecovery.timer);
+  // PEEK here, increment in the callback: attempts counts EXECUTED timed
+  // attempts. A foreground/connectivity/manual recovery that consumes a
+  // scheduled-but-unfired timer must neither eat a fast rung (its own
+  // failure re-arms the SAME rung) nor inflate the "timed attempt(s)" count
+  // the recovery log reports.
+  const attempt = _errorRecovery.attempts;
+  const delay =
+    attempt < ERROR_RETRY_DELAYS_MS.length ? ERROR_RETRY_DELAYS_MS[attempt] : ERROR_RETRY_SLOW_MS;
   _errorRecovery.timer = setTimeout(() => {
-    recoverPlaybackIfNeeded().catch(() => {});
+    if (!_errorRecovery) return;
+    _errorRecovery.timer = null;
+    _errorRecovery.attempts++;
+    recoverPlaybackIfNeeded("timer").catch(() => {});
   }, delay);
 }
 
@@ -1472,6 +1564,25 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
   if (!st.currentSession || st.isCasting) return;
   console.warn("[PlaybackStore] PlaybackError", e?.code, e?.message);
   const wasPlaying = st.isPlaying;
+  // Field-visible diagnostics (Settings → Logs): the "pauses at the end of
+  // every chapter" reports could never tell us WHICH error the player hit —
+  // console.warn only reaches adb. Position/chapter/queue-source/app-state
+  // say whether a report matches the backgrounded-streamer boundary
+  // fingerprint (stream queue, background app, position at a chapter edge)
+  // or is something new.
+  try {
+    const ch =
+      st.chapterQueue && st.chapters.length
+        ? chapterIndexAt(st.chapters, st.position) + 1
+        : 0;
+    appLogger.error(
+      `Player error${e?.code ? ` [${e.code}]` : ""}: ${e?.message || "unknown"} ` +
+        `(pos ${Math.round(st.position)}s${ch ? `, ch ${ch}/${st.chapters.length}` : ""}, ` +
+        `${_queueSource || "unknown"} queue, app ${AppState.currentState}, ` +
+        `${wasPlaying ? "was playing" : "was paused"})`,
+      "Playback"
+    );
+  } catch {}
   // The store position stays ~1s fresh even backgrounded (native progress
   // events) — persist it now so a process kill during the outage can't lose
   // it, and so a cold-start restore resumes where the stream died.
@@ -1489,8 +1600,11 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
 
 // Re-prepares an errored player and resumes if the error interrupted active
 // playback. Safe to call any time — it no-ops unless an unrecovered error is
-// pending. Returns true when a recovery actually ran.
-export async function recoverPlaybackIfNeeded(): Promise<boolean> {
+// pending. Returns true when a recovery actually ran. `trigger` is purely
+// diagnostic (Settings → Logs): which signal completed the recovery says a
+// lot — "foreground" recoveries with failed "timer" attempts before them are
+// the OS-denies-background-network fingerprint.
+export async function recoverPlaybackIfNeeded(trigger: string = "manual"): Promise<boolean> {
   const rec = _errorRecovery;
   const st = usePlaybackStore.getState();
   if (!rec || !st.currentSession || st.isCasting) return false;
@@ -1504,6 +1618,7 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
     // this call.
     const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
     if (ps && ps.state !== State.Error && ps.state !== State.None) {
+      appLogger.info(`Player recovered on its own (${trigger} check stood down)`, "Playback");
       _errorRecovery = null;
       return false;
     }
@@ -1521,6 +1636,7 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
       const resume = rec.resume;
       _errorRecovery = null;
       console.log("[PlaybackStore] Token rotated mid-session — rebuilding stream URLs.");
+      appLogger.info(`Token rotated mid-session — rebuilding stream URLs (${trigger})`, "Playback");
       return usePlaybackStore
         .getState()
         .preparePlaybackSession({ ...st.currentSession, currentTime: st.position }, resume);
@@ -1530,10 +1646,16 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
       await TrackPlayer.play();
       usePlaybackStore.setState({ isPlaying: true });
     }
+    appLogger.info(
+      `Playback recovered via ${trigger} after ${rec.attempts} timed attempt(s)` +
+        `${rec.resume ? ", resumed" : ""}`,
+      "Playback"
+    );
     _errorRecovery = null;
     return true;
-  } catch (err) {
+  } catch (err: any) {
     // Still down (e.g. network not back yet) — keep backing off.
+    appLogger.warn(`Recovery attempt (${trigger}) failed: ${err?.message || err}`, "Playback");
     scheduleErrorRetry();
     return false;
   }
@@ -2250,7 +2372,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             // only to stay under Android Auto's Binder limit. Both are deduped
             // by _lastMetaChapter so this only does native work on a real
             // chapter change.
-            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
+            // Buffered topping out at the item's end means the NEXT item's
+            // prebuffer is underway — the look-ahead stamp must not touch it
+            // (see applyNowPlayingChapter's nextItemHot).
+            const nextItemHot =
+              progress.duration > 0 &&
+              progress.buffered > 0 &&
+              progress.duration - progress.buffered < 12;
+            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex, nextItemHot);
           }
 
           if (get().currentSession !== tickSession) return;
@@ -2651,9 +2780,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // fallback fires with a completed record present, say so and demote the
       // record to a retryable failure so the item page tells the truth.
       let streamedDespiteDownload = false;
+      let localTrackCount = 0;
+      let streamTrackCount = 0;
       const resolveTrackUrl = (track: any, idx: number): string | null => {
         const local = localForTrack(track, idx);
-        if (local) return local;
+        if (local) {
+          localTrackCount++;
+          return local;
+        }
+        streamTrackCount++;
         if (download) streamedDespiteDownload = true;
         return absoluteUrl(track.contentUrl);
       };
@@ -2752,6 +2887,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (tracksToLoad.length === 0) {
         throw new Error("No playback tracks found in session");
       }
+      _queueSource =
+        streamTrackCount === 0 ? "local" : localTrackCount === 0 ? "stream" : "mixed";
 
       if (streamedDespiteDownload && download) {
         // Tell the user NOW (they believe this book is on-device) and make
@@ -3069,6 +3206,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         if (ps && (ps.state === State.Error || ps.state === State.None)) {
           clearErrorRecovery();
           await TrackPlayer.retry();
+          appLogger.info("Errored player re-prepared by manual play", "Playback");
         }
       } catch {}
     }
