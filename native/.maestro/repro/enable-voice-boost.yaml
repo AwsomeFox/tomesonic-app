@@ -1,0 +1,28 @@
+# TOGGLE "Enhance voice" (voice boost) before the repro flows run — matching
+# the reporting user's real settings (skip silence OFF, voice boost ON).
+# A row tap toggles: in CI this lands ON deterministically because 10-login
+# just launched with cleared state (defaults, boost off); a LOCAL re-run
+# against a warm install flips it back OFF — check Settings before trusting
+# a local repro.
+# Voice boost binds a LoudnessEnhancer to the ExoPlayer audio session and
+# re-creates it on every audio-session change; a 102-chapter clipped queue
+# multiplies the churn opportunities.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Account menu"
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: ".*Settings.*"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: "Enhance voice"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Enhance voice"
+- back
+- assertVisible: "Home"

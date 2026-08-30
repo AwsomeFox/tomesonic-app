@@ -316,6 +316,77 @@ describe("response interceptor", () => {
     expect(storageHelper.getServerConfig()).toMatchObject({ refreshToken: "r1" });
   });
 
+  // REGRESSION (poor-reception logout): after the native Android Auto service
+  // rotates the pair, auto_creds holds the only LIVE refresh token and the
+  // stored one is dead. Under poor reception the live candidate's POST can
+  // time out while the dead one reaches the server and draws a real 401 —
+  // and the round used to be classified by whichever error came LAST, logging
+  // the user out of a live session. A round with an unheard candidate must
+  // stay transient: no logout, next 401 retries.
+  it("does NOT log out when the fresh candidate times out and only the stale one draws the 401", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "dead-stored-refresh",
+    });
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue(
+      JSON.stringify({ server: "http://abs.local", token: "x", refreshToken: "live-file-refresh" })
+    );
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    const timeoutErr = { message: "timeout of 20000ms exceeded" }; // no response — never heard
+    postSpy
+      .mockRejectedValueOnce(timeoutErr) // live-file-refresh: eaten by the network
+      .mockRejectedValueOnce({ response: { status: 401 }, message: "dead token" }); // stored: real rejection
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(timeoutErr);
+    expect(postSpy.mock.calls[0][2].headers["x-refresh-token"]).toBe("live-file-refresh");
+    expect(postSpy.mock.calls[1][2].headers["x-refresh-token"]).toBe("dead-stored-refresh");
+    // Session survives: the unheard candidate may be the live one.
+    expect(useUserStore.getState().user).toEqual({ id: "u1" });
+    expect(storageHelper.getServerConfig()).toMatchObject({ refreshToken: "dead-stored-refresh" });
+  });
+
+  it("does NOT log out in the mirror order either (definitive first, then a network failure)", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "stored-refresh",
+    });
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue(
+      JSON.stringify({ server: "http://abs.local", token: "x", refreshToken: "file-refresh" })
+    );
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    const timeoutErr = { message: "Network Error" };
+    postSpy
+      .mockRejectedValueOnce({ response: { status: 403 }, message: "rejected" })
+      .mockRejectedValueOnce(timeoutErr);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(timeoutErr);
+    expect(useUserStore.getState().user).toEqual({ id: "u1" });
+  });
+
+  it("still logs out when EVERY candidate is definitively rejected (401/401)", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "dead-stored-refresh",
+    });
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue(
+      JSON.stringify({ server: "http://abs.local", token: "x", refreshToken: "dead-file-refresh" })
+    );
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    const deadErr = { response: { status: 401 }, message: "dead token" };
+    postSpy.mockRejectedValue(deadErr);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(deadErr);
+    expect(postSpy).toHaveBeenCalledTimes(2); // both candidates were heard and rejected
+    expect(useUserStore.getState().user).toBeNull();
+    expect(storageHelper.getServerConfig()).toBeNull();
+  });
+
   it("treats an invalid refresh response structure as a failure (but not a logout)", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local",

@@ -1,0 +1,207 @@
+# REPRO, dimension 0 — the REPORTED BOOK'S SHAPE: one m4b, 102 chapters
+# ("This Inevitable Ruin": single 1.64GB m4b, 102 chapters, 28h — scaled to
+# 102 × 12s so boundaries arrive every ~8s at 1.5×). Two legs:
+#
+#   1. STREAMED: the reporting user's own failing case — their download had
+#      silently failed, so the clipped queue ran over the HTTP source. Every
+#      chapter transition re-opens the remote m4b (moov parse + ranged seek).
+#   2. DOWNLOADED: the shape everyone else reports.
+#
+# Both at 1.5× with voice boost ON (set by enable-voice-boost.yaml) — the
+# user's real conditions. Caption asserts are PROGRESSION-shaped (regex
+# floors, not exact chapters) so they can't go stale between taps.
+#
+# Run 13: 20 consecutive STREAMED transitions at exactly 8.00s apart (POS
+# sampler), captions in lockstep — and the chapters-sheet deep jump is
+# unwinnable while playing (PlayerChaptersQueueSheet re-fires
+# scrollToIndex(current-2) on every chapter change, yanking the list back
+# each 8s boundary). The deep jump is a SKIP STORM instead: repeated "Next
+# chapter" taps — the same seekToChapter path the sheet rows call, and the
+# AVRCP next path the reporter's Bluetooth transport hits.
+#
+# Run 14 sized the storms wrong and paid for it: Maestro paces each tap by a
+# UI-settle wait (~8s here, because the slider/caption update keeps the UI
+# "busy"), so every tap also buys one NATURAL 8s crossing — a 45-tap storm
+# consumed ~90 chapters, leg 1 ended near chapter 99, and leg 2's storm ran
+# the queue OFF THE END: item id=101 (chapter 102) played out and the player
+# went STOPPED at its clip end. That STOPPED was the END OF THE BOOK, not
+# the reported bug. Storm sizes are now budgeted at taps×2 (tap + concurrent
+# natural) against the 102-chapter fixture, and both legs' floor asserts
+# exclude the 100s so an end-of-book state can never satisfy them. Leg 1's
+# 45-tap+naturals interleave DID pass everything streamed — deep skips and
+# natural crossings both clean.
+#
+# Run 15 killed the "elapsed wrap" natural-crossing asserts: the slider's
+# momentary 1-3s windows race Maestro's polling, and a FAILING
+# extendedWaitUntil was observed giving up 2.5-7s into a 15s timeout — the
+# mechanism produced a false red over a POS-verified perfect run (and its
+# leg-1 passes landed at moments the window math can't explain, so its
+# greens weren't trustworthy either). The natural-crossing verdict now
+# lives in the RUNNER, deterministically: the 2s POS sampler records every
+# session state push, a proper stop-and-close reads NONE and a pause reads
+# PAUSED, so any mid-pipeline STOPPED sample is precisely the
+# stop-at-boundary fingerprint (or an unplanned queue end) — the runner
+# fails the run on it after dimension 1. In-flow, the progression floors
+# plus the Pause gates already require playback to keep advancing.
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Abort-safety, three states (run 13 proved the miniplayer-only version
+# insufficient — the app can resume ON the full player, chapters sheet open,
+# where "Expand player.*" doesn't exist and the bare "Home" text still
+# matches). Order matters: dismiss the sheet, then stop from the full
+# player, then the miniplayer case; optional steps sail through when
+# nothing is playing.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
+- runFlow:
+    when:
+      visible: "Expand player.*"
+    commands:
+      - tapOn: "Expand player.*"
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+
+# With stopApp:false no flow starts from a known screen: a predecessor's
+# teardown (or the preamble's stop-and-close) leaves the app on an ITEM PAGE
+# (run 14's dimension-1 hierarchy: "Play" + "View chapters" — The Long
+# Book's page, where no library row exists). If the target book isn't
+# visible, pop back toward Home; the launchApp re-foregrounds the app in
+# case back was pressed on Home's root and backgrounded it.
+- runFlow:
+    when:
+      notVisible: "The Long Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+
+# ---- Leg 1: STREAMED at 1.5x ---------------------------------------------
+- tapOn:
+    text: "The Long Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+# NOT downloaded yet — this play streams, like the reporter's failing case.
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Speed FIRST — before any caption assert (run 12 asserted first and never
+# reached this tap). 1.5x is the reported listening band; it persists
+# app-globally into the download leg.
+- tapOn: "Playback speed.*"
+- extendedWaitUntil:
+    visible: "1.5 times speed"
+    timeout: 5000
+- tapOn: "1.5 times speed"
+- back
+# Progression asserts: any caption proves the clipped session is live; a
+# two-digit chapter (10+) proves at least ~6 boundaries crossed WHILE STILL
+# PLAYING. 12s chapters at 1.5x = one boundary per ~8s.
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 102"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Chapter \\d\\d of 102"
+    timeout: 90000
+- assertVisible: "Pause"
+# SKIP STORM: 20 seekToChapter(+1) taps. Budget ~x2 in chapters (each ~8s
+# tap also buys one natural crossing): from ~ch10-15 this lands ~ch45-60,
+# leaving leg 2 a deep resume point with room below chapter 102.
+- repeat:
+    times: 20
+    commands:
+      - tapOn: "Next chapter"
+# Deep in the queue AND still playing after the storm. 30-69 only — an
+# end-of-book state (chapter 100+) must never satisfy this.
+- extendedWaitUntil:
+    visible: "Chapter [3-6]\\d of 102"
+    timeout: 10000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000
+
+# ---- Leg 2: DOWNLOADED at 1.5x -------------------------------------------
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 180000
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 102"
+    timeout: 15000
+# DOWNLOADED natural boundaries at depth run under the sampler from here to
+# the storm — the runner's STOPPED-fingerprint gate is their judge.
+- assertVisible: "Pause"
+# Short storm: resumes ~ch45-60 after leg 1; 10 taps ≈ +20 chapters lands
+# ~ch65-80, well clear of 102. Floor excludes the 100s so an end-of-book
+# state can never satisfy it (run 14's 10[0-2] alternative matched the
+# legitimately-ended chapter 102).
+- repeat:
+    times: 10
+    commands:
+      - tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter [6-9]\\d of 102"
+    timeout: 10000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000

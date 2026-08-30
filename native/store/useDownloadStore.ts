@@ -88,6 +88,16 @@ function folderForItem(item?: DownloadItem | null): string | null {
 }
 
 /**
+ * Join a folder path and filename, tolerating legacy persisted folder paths
+ * that lack the trailing slash (the same defense ensureLocalCover uses) — a
+ * bare concatenation would stat ".../item1track_0.mp3" and falsely demote a
+ * perfectly valid download.
+ */
+function joinFolderFile(folder: string, filename: string): string {
+  return folder.endsWith("/") ? `${folder}${filename}` : `${folder}/${filename}`;
+}
+
+/**
  * The download namespace for the CURRENT account: `${serverAddress}::${userId}`.
  * Prefers the durable lastSessionKey (it survives a forced 401 logout, so a
  * later re-login re-adopts the SAME namespace and its files); falls back to
@@ -124,8 +134,14 @@ interface DownloadState {
   setDownloadFolder: (id: string, localFolderPath: string) => void;
   updateDownloadProgress: (id: string, partId: string, bytesDownloaded: number, fileSize: number) => void;
   completeDownloadPart: (id: string, partId: string, localFilePath: string) => void;
-  completeDownload: (id: string, localFolderPath: string) => void;
+  completeDownload: (id: string, localFolderPath: string) => Promise<void>;
   failDownload: (id: string, errorMsg: string) => void;
+  // Demote a COMPLETED download whose files turn out broken/missing (found at
+  // playback time) back to a retryable failure — failDownload only touches
+  // active items, so a bad completed copy had NO path back to honesty: the
+  // item page kept showing "Delete download" while playback silently
+  // streamed. Keeps parts so retryDownload resumes just the missing pieces.
+  markDownloadBroken: (id: string, reason: string) => Promise<void>;
   cancelDownload: (id: string) => void;
   // Delete a download's files (completed or partial) + remove it from local media.
   removeDownload: (id: string) => Promise<void>;
@@ -362,10 +378,70 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     }));
   },
 
-  completeDownload: (id, localFolderPath) => {
+  completeDownload: async (id, localFolderPath) => {
     const active = get().activeDownloads;
     const item = active[id];
     if (!item) return;
+
+    // VALIDATE BEFORE BELIEVING: the reporting user's book was marked
+    // downloaded while playback silently streamed — a "completed" record
+    // whose audio files aren't actually on disk is worse than a failure,
+    // because every surface then lies. Stat every track part; a missing or
+    // empty file demotes the download to a retryable failure instead of
+    // recording a completion the player can't honor. Stat EXCEPTIONS stay
+    // fail-open (a transient fs hiccup must not brick a good download) —
+    // only a definitive exists:false / size 0 fails.
+    const trackParts = (item.parts || []).filter(
+      p => String(p?.id || "").startsWith("track_") && p.completed
+    );
+    const invalidPartIds: string[] = [];
+    for (const part of trackParts) {
+      const raw =
+        part.localFilePath || (localFolderPath ? joinFolderFile(localFolderPath, part.filename) : null);
+      if (!raw) continue;
+      const path = raw.startsWith("file://") ? raw : `file://${raw}`;
+      try {
+        const info: any = await FileSystem.getInfoAsync(path, { size: true } as any);
+        if (!info?.exists || info?.size === 0) {
+          console.warn("[Downloads] completed download failed validation", id, part.id, path);
+          invalidPartIds.push(part.id);
+        }
+      } catch {
+        // fail-open: can't stat ≠ known-missing
+      }
+    }
+    // The stat loop AWAITED — the entry may have moved while it ran. A cancel
+    // during validation removed it, and committing this stale snapshot would
+    // resurrect the discarded download — as "completed" while cancel's
+    // deferred folder-delete (which checks activeDownloads) razes its files,
+    // or as a ghost "failed" row that makes that same check SKIP the delete
+    // and orphan the partials. A cancel + immediate re-download REPLACED the
+    // object, and committing would clobber the new run's ledger (or complete
+    // it from this stale one). Every writer swaps in a new object, so
+    // identity means "same run, untouched" — anything else, this completion
+    // is moot.
+    if (get().activeDownloads[id] !== item) return;
+    if (invalidPartIds.length > 0) {
+      // UN-COMPLETE the invalid parts before failing: retry/resume re-fetches
+      // exactly `!p.completed` parts, so a demotion that left every part
+      // "completed" made the retry affordance a no-op that re-failed this
+      // same validation forever.
+      const failedItem = {
+        ...item,
+        status: "failed" as const,
+        error: "Download incomplete — tap retry to resume",
+        parts: (item.parts || []).map(pt =>
+          invalidPartIds.includes(pt.id)
+            ? { ...pt, completed: false, bytesDownloaded: 0 }
+            : pt
+        ),
+      };
+      db.saveDownloadItem(failedItem);
+      set(state => ({
+        activeDownloads: { ...state.activeDownloads, [id]: failedItem },
+      }));
+      return;
+    }
 
     const completedItem = {
       ...item,
@@ -421,6 +497,95 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         [id]: failedItem,
       },
     }));
+  },
+
+  markDownloadBroken: async (id, reason) => {
+    const item = get().completedDownloads[id];
+    if (!item) {
+      // Already active (or unknown): the ordinary failure path handles it.
+      get().failDownload(id, reason);
+      return;
+    }
+    // A legacy completed record with NO track parts can't be repaired by
+    // retry at all: resume computes its work from the parts ledger, finds
+    // nothing to fetch, and immediately re-completes — resurrecting the
+    // very silent-streaming lie this demotion exists to end. The only
+    // honest state for such a record is GONE: remove the download (files,
+    // record, offline mapping) so the item page offers a plain fresh
+    // download.
+    const hasTrackParts = (item.parts || []).some(pt =>
+      String(pt?.id || "").startsWith("track_")
+    );
+    if (!hasTrackParts) {
+      console.warn(
+        "[Downloads] broken completed download has no track parts — removing instead of demoting",
+        id
+      );
+      await get().removeDownload(id);
+      return;
+    }
+    // Retry/resume re-fetches exactly the `!p.completed` parts, so the
+    // demotion must UN-COMPLETE what is actually broken or the retry
+    // affordance fetches nothing and the book stays wedged. Stat each track
+    // part; definitively missing/empty ones un-complete. If the sweep finds
+    // nothing (the ledger itself is missing the track, or stats failed),
+    // un-complete every track part — a full audio re-fetch is the only
+    // honest repair for a ledger that can't say what exists.
+    const folder = item.localFolderPath;
+    let anyInvalid = false;
+    const sweptParts = await Promise.all(
+      (item.parts || []).map(async pt => {
+        if (!String(pt?.id || "").startsWith("track_") || !pt.completed) return pt;
+        const raw = pt.localFilePath || (folder ? joinFolderFile(folder, pt.filename) : null);
+        if (!raw) {
+          anyInvalid = true;
+          return { ...pt, completed: false, bytesDownloaded: 0 };
+        }
+        const path = raw.startsWith("file://") ? raw : `file://${raw}`;
+        try {
+          const info: any = await FileSystem.getInfoAsync(path, { size: true } as any);
+          if (!info?.exists || info?.size === 0) {
+            anyInvalid = true;
+            return { ...pt, completed: false, bytesDownloaded: 0 };
+          }
+        } catch {}
+        return pt;
+      })
+    );
+    // The sweep AWAITED — bail if the completed entry moved while it ran
+    // (the user removed the download from the Downloads screen, or a fresh
+    // run replaced the row): writing this stale snapshot would resurrect a
+    // record whose files removeDownload just deleted.
+    if (get().completedDownloads[id] !== item) return;
+    const finalParts = anyInvalid
+      ? sweptParts
+      : sweptParts.map(pt =>
+          String(pt?.id || "").startsWith("track_")
+            ? { ...pt, completed: false, bytesDownloaded: 0 }
+            : pt
+        );
+    const brokenItem = {
+      ...item,
+      status: "failed" as const,
+      error: reason || "Downloaded copy incomplete — tap retry to re-download",
+      parts: finalParts,
+    };
+    db.saveDownloadItem(brokenItem);
+    // The offline mapping said "isDownloaded" — that claim is what let every
+    // surface (item page, offline library) keep vouching for a copy the
+    // player couldn't use. Retract it until a retry re-completes. The row is
+    // keyed by the DOWNLOAD id (what completeDownload saved) — for episodes
+    // that composite id differs from libraryItemId, and removing by the
+    // wrong key would leave the stale claim standing (or clip a sibling's).
+    db.removeLocalLibraryItem(id);
+    set(state => {
+      const nextCompleted = { ...state.completedDownloads };
+      delete nextCompleted[id];
+      return {
+        completedDownloads: nextCompleted,
+        activeDownloads: { ...state.activeDownloads, [id]: brokenItem },
+      };
+    });
   },
 
   cancelDownload: (id) => {

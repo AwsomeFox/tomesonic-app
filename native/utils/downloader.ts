@@ -538,7 +538,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
@@ -548,9 +550,22 @@ export const downloader = {
       }
 
       // If we finished all parts successfully
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
-      console.log(`[Downloader] Download completed successfully for book: ${title}`);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Download completed successfully for book: ${title}`);
+      } else {
+        // Validation demoted the completion (missing/empty file on disk):
+        // take the in-progress notification down and tell the truth — the
+        // Downloads UI carries the retryable failure.
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Download failed on-disk validation for book: ${title}`);
+      }
 
       // This book is done — release the running guard.
       runningBooks.delete(id);
@@ -783,7 +798,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
@@ -792,9 +809,19 @@ export const downloader = {
         return;
       }
 
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
-      console.log(`[Downloader] Episode download completed: ${title}`);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Episode download completed: ${title}`);
+      } else {
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Episode download failed on-disk validation: ${title}`);
+      }
       runningBooks.delete(id);
     } catch (err: any) {
       if (!isCurrent()) return;
@@ -863,7 +890,9 @@ export const downloader = {
           downloadNotifications.clear(id);
           return;
         }
-        const destPath = `${localFolderPath}${part.filename}`;
+        const destPath = localFolderPath.endsWith("/")
+          ? `${localFolderPath}${part.filename}`
+          : `${localFolderPath}/${part.filename}`;
         // Token may have rotated since the original attempt; rebuild the url with the current one.
         const refreshedUrl = part.url.split("?")[0];
         const url = absoluteUrl(refreshedUrl, serverAddress, token);
@@ -875,9 +904,19 @@ export const downloader = {
         return;
       }
 
-      useDownloadStore.getState().completeDownload(id, localFolderPath);
-      downloadNotifications.complete(id, title);
-      console.log(`[Downloader] Resume completed successfully for book: ${title}`);
+      await useDownloadStore.getState().completeDownload(id, localFolderPath);
+      // completeDownload awaits on-disk validation — a newer run can take
+      // ownership during that window, and a superseded run must not touch
+      // the new run's notifications or logs (same guard as every other
+      // await in this loop).
+      if (!isCurrent()) return;
+      if (useDownloadStore.getState().completedDownloads[id]) {
+        downloadNotifications.complete(id, title);
+        console.log(`[Downloader] Resume completed successfully for book: ${title}`);
+      } else {
+        downloadNotifications.clear(id);
+        console.warn(`[Downloader] Resume failed on-disk validation for book: ${title}`);
+      }
     } catch (err: any) {
       if (!isCurrent()) return;
       console.error(`[Downloader] Resume failed for book ${title}:`, err);

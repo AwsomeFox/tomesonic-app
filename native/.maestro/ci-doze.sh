@@ -51,7 +51,21 @@ doze_sandwich() {
   echo "== entering Doze for ${mins} min =="
   adb shell dumpsys battery unplug || true          # optional: pretend unplugged
   adb shell input keyevent KEYCODE_SLEEP || true    # optional: screen off
+  # deviceidle ships DISABLED on the runner's emulator image, and dumpsys
+  # exits 0 even when force-idle refuses ("Unable to go deep idle; not
+  # enabled") — so without the enable + state readback the whole suite can
+  # no-op-pass while never idling (caught by the chapter-pause repro rig,
+  # whose sandwich did exactly that). The readback is the only signal
+  # dumpsys can't fake; failing here fails the scenario loudly.
+  adb shell dumpsys deviceidle enable all || true
   adb shell dumpsys deviceidle force-idle           # CORE: force deep Doze
+  local deep
+  deep=$(adb shell dumpsys deviceidle get deep | tr -d '[:space:]')
+  echo "deviceidle deep state: $deep"
+  if [ "$deep" != "IDLE" ]; then
+    echo "!! force-idle did not take (deep state: $deep) — doze scenario is void"
+    return 1
+  fi
   sleep "$((mins * 60))"
   adb shell dumpsys deviceidle unforce              # CORE: lift Doze
   adb shell dumpsys battery reset || true           # optional: restore battery

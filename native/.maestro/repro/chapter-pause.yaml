@@ -1,0 +1,181 @@
+# REPRO: "with some downloaded books playback paused at the end of each
+# chapter". Downloads both seeded book shapes and plays each NATURALLY across
+# its chapter boundaries — no seeks, no chapter buttons — because the bug (if
+# real) lives in the END-OF-ITEM auto-advance, a path every existing flow
+# sidesteps (they pause first or jump within a chapter).
+#
+# Two shapes, two queue modes:
+#  - "The Chapter Book": ONE m4b file, 3 embedded 25s chapters → the
+#    chapter-clipped queue (one clipped RNTP item per chapter).
+#  - "The Test Book": TWO 30s files, chapters derived per-file by ABS → the
+#    multi-file queue (one item per file).
+#
+# Both are DOWNLOADED first (the report is about downloaded books; a
+# downloaded book plays its local copy even online). The assert pattern at
+# each boundary is:
+#   1. the "Chapter N of M" caption advances (times out → playback never left
+#      the old chapter: reproduced), then
+#   2. the transport still shows "Pause" (shows "Play" → playback advanced
+#      but PAUSED at the boundary: reproduced).
+appId: com.tomesonic.app
+---
+# stopApp: false — a bare launchApp KILLS the app, and if an earlier flow
+# aborted mid-playback, Android's media resumption RESTARTS the dead session
+# after the kill (run 12: the storm book auto-resumed and this flow's Play
+# tap hit its miniplayer instead of the item page).
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Abort-safety, three states (run 13: the storm died with the chapters
+# sheet OPEN over the full player, "Expand player.*" never matched, and this
+# flow then hunted for its book on a screen that wasn't Home — the bare
+# "Home" text assert above matches even there). Dismiss the sheet, stop from
+# the full player, then the miniplayer case; all sail through when nothing
+# is playing.
+- runFlow:
+    when:
+      visible: "Dismiss chapters and queue list"
+    commands:
+      - tapOn: "Dismiss chapters and queue list"
+- runFlow:
+    when:
+      visible: "Collapse player"
+    commands:
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+      - extendedWaitUntil:
+          notVisible: "Collapse player"
+          timeout: 10000
+- runFlow:
+    when:
+      visible: "Expand player.*"
+    commands:
+      - tapOn: "Expand player.*"
+      - tapOn: "More options"
+      - extendedWaitUntil:
+          visible: "Stop and close player"
+          timeout: 5000
+      - tapOn: "Stop and close player"
+
+# With stopApp:false no flow starts from a known screen — a predecessor (or
+# the preamble's stop-and-close) leaves the app on an ITEM PAGE, where no
+# library row exists (run 14). Pop back toward Home if the target book
+# isn't visible; launchApp re-foregrounds if back ran on Home's root.
+- runFlow:
+    when:
+      notVisible: "The Chapter Book by .*"
+    commands:
+      - back
+      - launchApp:
+          stopApp: false
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 10000
+
+# ---- Download the chapter-queue book -------------------------------------
+- tapOn:
+    text: "The Chapter Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 120000
+
+# ---- Play it through BOTH embedded-chapter boundaries --------------------
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# The storm leg's 1.5x is app-global: 25s chapters play in ~17s, and the
+# ~20s of preamble/expand latency can outlive chapter 1 entirely (run 15
+# failed hunting "Chapter 1 of 3" while the player showed chapter 2) — so
+# the anchor accepts either of the first two chapters.
+- extendedWaitUntil:
+    visible: "Chapter [12] of 3"
+    timeout: 15000
+# A pause AT a boundary leaves the caption stuck (never reaches 3) or flips
+# it with "Play" showing — either way one of the two asserts goes red.
+- extendedWaitUntil:
+    visible: "Chapter 3 of 3"
+    timeout: 60000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+# TEAR DOWN the session, not just collapse it: a surviving miniplayer carries
+# its own "Play" control, and the next leg's bare ^(Play|Continue)$ tap
+# matched IT instead of the item page's button (runs 1-3: the hierarchy shows
+# the tap resuming "The Chapter Book … Chapter 3" — the second book never
+# started, and the caption assert judged the WRONG book). Stop-and-close is
+# the only in-player dismissal; portrait reaches it via the overflow.
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000
+- back
+
+# ---- Download the multi-file book ----------------------------------------
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: "The Test Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 120000
+
+# ---- Play it through the file boundary -----------------------------------
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Chapter [12] of 2"
+    timeout: 15000
+# 30s file at 1.5x = ~20s: the item auto-advance at the FILE boundary. If
+# the anchor already caught chapter 2 this passes instantly — the boundary
+# was then crossed before the assert, with Pause below still gating it.
+- extendedWaitUntil:
+    visible: "Chapter 2 of 2"
+    timeout: 60000
+- assertVisible: "Pause"
+- tapOn: "Pause"
+- assertVisible: "Play"
+# Same teardown as the first leg: the doze flow runs AFTER this file and
+# opens its book by the same bare Play tap — leave no miniplayer to steal it.
+- tapOn: "More options"
+- extendedWaitUntil:
+    visible: "Stop and close player"
+    timeout: 5000
+- tapOn: "Stop and close player"
+- extendedWaitUntil:
+    notVisible: "Expand player.*"
+    timeout: 10000

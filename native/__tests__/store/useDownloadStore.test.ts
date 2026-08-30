@@ -156,13 +156,266 @@ describe("useDownloadStore", () => {
     });
   });
 
+    describe("completed-download honesty (silent-streaming fix)", () => {
+    it("refuses to mark complete when a track file is missing on disk", async () => {
+      // The reporting user's case: every part 'completed' per the ledger,
+      // nothing actually on disk — completion must demote to a retryable
+      // failure instead of recording a copy the player can't honor.
+      jest.mocked(FileSystem.getInfoAsync).mockResolvedValue({ exists: false } as any);
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"].status).toBe("failed");
+      expect(s.activeDownloads["item1"].error).toMatch(/incomplete/i);
+      // The invalid part is UN-COMPLETED so retry actually re-fetches it —
+      // retry/resume picks `!p.completed` parts, so leaving it completed
+      // made the retry affordance a no-op that re-failed validation forever.
+      const part = s.activeDownloads["item1"].parts.find(pt => pt.id === "track_0")!;
+      expect(part.completed).toBe(false);
+      expect(part.bytesDownloaded).toBe(0);
+    });
+
+    it("refuses to mark complete when a track file exists but is empty", async () => {
+      jest.mocked(FileSystem.getInfoAsync).mockResolvedValue({ exists: true, size: 0 } as any);
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("failed");
+    });
+
+    it("completes normally when every track file is present", async () => {
+      jest.mocked(FileSystem.getInfoAsync).mockResolvedValue({ exists: true, size: 1000 } as any);
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
+    });
+
+    it("joins legacy slashless folder paths correctly instead of falsely demoting", async () => {
+      // Legacy rows persist localFolderPath without the trailing slash; a
+      // bare concatenation would stat ".../item1track_0.m4b" (missing), and
+      // the demotion would un-complete a perfectly valid download.
+      const statted: string[] = [];
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async (p: any) => {
+        statted.push(String(p));
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            localFolderPath: "file:///downloads/item1", // no trailing slash
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1");
+      expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
+      expect(statted).toContain("file:///downloads/item1/a.m4b");
+    });
+
+    it("stays fail-open when the stat itself throws", async () => {
+      // A transient fs hiccup must not brick a good download — only a
+      // definitive exists:false / size 0 fails validation.
+      jest.mocked(FileSystem.getInfoAsync).mockRejectedValue(new Error("EBUSY"));
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      expect(useDownloadStore.getState().completedDownloads["item1"].status).toBe("completed");
+    });
+
+    it("bails when the download is cancelled while validation is in flight", async () => {
+      // The stat loop awaits; a cancel landing inside that window removes the
+      // active entry. Committing the pre-await snapshot anyway would
+      // resurrect the cancelled download as "completed" — right as cancel's
+      // deferred folder-delete razes its files.
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ activeDownloads: {} }); // cancel landed mid-stat
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+    });
+
+    it("does not clobber a replacement run that started while validation was in flight", async () => {
+      // Cancel + immediate re-download swaps a fresh item in under the same
+      // id during the stat window. The stale completion must leave the new
+      // run's ledger exactly as it found it.
+      const replacement = baseItem({ status: "downloading" });
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ activeDownloads: { item1: replacement } });
+        return { exists: true, size: 1000 } as any;
+      });
+      useDownloadStore.setState({
+        activeDownloads: {
+          item1: baseItem({
+            status: "downloading",
+            parts: [
+              { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+            ],
+          }),
+        },
+      });
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["item1"]).toBe(replacement);
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+    });
+  });
+
+  describe("markDownloadBroken", () => {
+    it("bails when the download is removed while the stat sweep is in flight", async () => {
+      // removeDownload during the sweep deletes the completed entry, its DB
+      // rows, and its folder. Writing the stale snapshot afterwards would
+      // resurrect a ghost "failed" row for a download that no longer exists.
+      jest.mocked(FileSystem.getInfoAsync).mockImplementation(async () => {
+        useDownloadStore.setState({ completedDownloads: {} }); // removeDownload landed mid-sweep
+        return { exists: false } as any;
+      });
+      const done = baseItem({
+        status: "completed",
+        progress: 1,
+        parts: [
+          { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 1000, fileSize: 1000, completed: true, localFilePath: "/downloads/item1/a.m4b" },
+        ],
+      });
+      useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+    });
+
+    it("demotes a completed download to a retryable failure and retracts the offline mapping", async () => {
+      const done = baseItem({ status: "completed", progress: 1 });
+      useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
+      db.saveLocalLibraryItem({ id: "item1", libraryItemId: "item1", isDownloaded: true });
+
+      await useDownloadStore.getState().markDownloadBroken("item1", "Downloaded copy incomplete — tap retry to re-download");
+
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"].status).toBe("failed");
+      expect(s.activeDownloads["item1"].error).toMatch(/incomplete/i);
+      // Parts preserved so retry resumes rather than restarting — and every
+      // broken/unverifiable track part is UN-COMPLETED so retry re-fetches
+      // it (retry picks `!p.completed` parts).
+      expect(s.activeDownloads["item1"].parts.length).toBeGreaterThan(0);
+      for (const pt of s.activeDownloads["item1"].parts) {
+        if (pt.id.startsWith("track_")) expect(pt.completed).toBe(false);
+      }
+      // The offline library stops vouching for files that are not there.
+      expect(db.getLocalLibraryItem("item1")).toBeFalsy();
+    });
+
+    it("retracts the mapping by the DOWNLOAD id, not libraryItemId (episode composite keys)", async () => {
+      // Episode downloads key by `${libraryItemId}::${episodeId}` — the offline
+      // row is saved under that composite id, and removing by bare
+      // libraryItemId would leave the stale isDownloaded claim standing.
+      const done = baseItem({
+        id: "book1::ep1",
+        libraryItemId: "book1",
+        status: "completed",
+        progress: 1,
+      });
+      useDownloadStore.setState({ completedDownloads: { "book1::ep1": done }, activeDownloads: {} });
+      db.saveLocalLibraryItem({ id: "book1::ep1", libraryItemId: "book1", isDownloaded: true });
+      db.saveLocalLibraryItem({ id: "book1", libraryItemId: "book1", isDownloaded: true });
+
+      await useDownloadStore.getState().markDownloadBroken("book1::ep1", "broken");
+
+      expect(db.getLocalLibraryItem("book1::ep1")).toBeFalsy();
+      // The sibling BOOK row (different download) is untouched.
+      expect(db.getLocalLibraryItem("book1")).toBeTruthy();
+    });
+
+    it("removes (not demotes) a legacy completed record with no track parts", async () => {
+      // Retry computes its work from the parts ledger; a trackless record
+      // demoted to "failed" would retry into an instant re-complete and
+      // resurrect the silent-streaming lie. The only honest state is gone.
+      const done = baseItem({
+        status: "completed",
+        progress: 1,
+        parts: [{ id: "cover", filename: "cover.jpg", url: "u1", bytesDownloaded: 10, fileSize: 10, completed: true }],
+      });
+      useDownloadStore.setState({ completedDownloads: { item1: done }, activeDownloads: {} });
+      db.saveLocalLibraryItem({ id: "item1", libraryItemId: "item1", isDownloaded: true });
+
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
+
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["item1"]).toBeUndefined();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+      expect(db.getLocalLibraryItem("item1")).toBeFalsy();
+    });
+
+    it("falls through to failDownload for an item that is only active", async () => {
+      useDownloadStore.setState({
+        activeDownloads: { item1: baseItem({ status: "downloading" }) },
+        completedDownloads: {},
+      });
+      await useDownloadStore.getState().markDownloadBroken("item1", "broken");
+      expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("failed");
+    });
+  });
+
   describe("completeDownload", () => {
-    it("moves the item from active to completed with progress 1 and clears errors", () => {
+    it("moves the item from active to completed with progress 1 and clears errors", async () => {
       useDownloadStore.setState({
         activeDownloads: { item1: baseItem({ status: "downloading", error: "flaky" }) },
       });
 
-      useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+      await useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
 
       const s = useDownloadStore.getState();
       expect(s.activeDownloads["item1"]).toBeUndefined();

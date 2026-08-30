@@ -2546,7 +2546,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           (positional.id === key || String(positional.id).startsWith(`${key}_`))
             ? positional
             : (download.parts || []).find((p: any) => p.id === key);
-        const path = part?.localFilePath || (localFolder && part ? `${localFolder}${part.filename}` : null);
+        // Legacy persisted folder paths can lack the trailing slash — a bare
+        // concatenation built ".../item1track_0.m4b" and the native player
+        // failed on a file that exists (same defense as joinFolderFile in
+        // useDownloadStore / ensureLocalCover in the downloader).
+        const path =
+          part?.localFilePath ||
+          (localFolder && part
+            ? localFolder.endsWith("/")
+              ? `${localFolder}${part.filename}`
+              : `${localFolder}/${part.filename}`
+            : null);
         if (!path) return null;
         return path.startsWith("file://") ? path : `file://${path}`;
       };
@@ -2634,11 +2644,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const carCompat = !!useUserStore.getState().settings.carCompatibilityMode;
       const chapterQueue = chapters.length > 1 && audioTracks.length === 1 && !carCompat;
 
+      // LOUD local-fallback: a book with a COMPLETED download record whose
+      // track can't resolve to a local file used to stream in total silence —
+      // the reporting user listened to "their download" for hours over a
+      // strained link before discovering it had never finished. When the
+      // fallback fires with a completed record present, say so and demote the
+      // record to a retryable failure so the item page tells the truth.
+      let streamedDespiteDownload = false;
+      const resolveTrackUrl = (track: any, idx: number): string | null => {
+        const local = localForTrack(track, idx);
+        if (local) return local;
+        if (download) streamedDespiteDownload = true;
+        return absoluteUrl(track.contentUrl);
+      };
+
       let tracksToLoad: any[];
       const trackOffsets: number[] = [];
       if (chapterQueue) {
         const track = audioTracks[0];
-        const fileUrl = localForTrack(track, track.index ?? 0) || absoluteUrl(track.contentUrl);
+        const fileUrl = resolveTrackUrl(track, track.index ?? 0);
         if (!fileUrl) throw new Error("Track has no playable URL");
         const startOffset = track.startOffset || 0;
         tracksToLoad = chapters.map((ch: any, i: number) => {
@@ -2688,7 +2712,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const off = Number.isFinite(Number(track.startOffset)) ? Number(track.startOffset) : acc;
           trackOffsets.push(off);
           acc = off + (Number(track.duration) || 0);
-          const url = localForTrack(track, idx) || absoluteUrl(track.contentUrl);
+          const url = resolveTrackUrl(track, idx);
           if (!url) throw new Error("Track has no playable URL");
           const t: any = {
             id: `${session.id}_${track.index ?? idx}`,
@@ -2727,6 +2751,34 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
       if (tracksToLoad.length === 0) {
         throw new Error("No playback tracks found in session");
+      }
+
+      if (streamedDespiteDownload && download) {
+        // Tell the user NOW (they believe this book is on-device) and make
+        // the item page tell the truth: the completed record demotes to a
+        // retryable failure, so "Delete download" stops vouching for files
+        // that aren't there and the existing retry affordance appears.
+        console.warn(
+          `[Playback] Downloaded book resolved no local file — streaming instead (${download.id})`
+        );
+        try {
+          const { useDownloadStore } = require("./useDownloadStore");
+          useDownloadStore
+            .getState()
+            .markDownloadBroken(download.id, "Downloaded copy incomplete — tap retry to re-download")
+            .catch((e: any) => console.warn("[Playback] markDownloadBroken failed", e));
+        } catch (e) {
+          console.warn("[Playback] markDownloadBroken unavailable", e);
+        }
+        try {
+          const { useSnackbarStore } = require("./useSnackbarStore");
+          useSnackbarStore.getState().show({
+            message: "Downloaded copy incomplete — streaming this book instead",
+            durationMs: 6000,
+          });
+        } catch (e) {
+          console.warn("[Playback] snackbar unavailable", e);
+        }
       }
 
       // Resolve the resume position BEFORE touching the player.
