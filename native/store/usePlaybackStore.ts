@@ -114,9 +114,12 @@ export const MAX_CAR_TILE_ITEMS = 64;
 // the native Android Auto "Chapters" browse section (fed by
 // writeAutoChapters) keeps the chapter list in the car for flat books too,
 // so nothing user-facing is lost. With android:largeHeap (512MB) the cap
-// sits at 20h: the whole-file table is ~25MB/copy there (two copies live at
-// a boundary ≈ 60MB of tables) — typical audiobooks keep the per-chapter
-// AA queue rows, only true monsters go flat.
+// sits at 20h: ~3.1M samples there → ~75MB of table arrays per parse
+// (largest single allocation ~25MB), and two parses live at a boundary
+// ≈ 150MB of tables — comfortably inside 512MB next to the RN runtime,
+// where the 28.5h field failure (~107MB/parse) was not inside 256MB.
+// Typical audiobooks keep the per-chapter AA queue rows; only true
+// monsters go flat.
 export const CHAPTER_QUEUE_MAX_SECONDS = 20 * 3600;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
