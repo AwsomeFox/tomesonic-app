@@ -465,6 +465,24 @@ describe("usePlaybackStore playback-error recovery", () => {
           )
       ).toBe(true);
     });
+
+    it("names an Error-shaped payload instead of collapsing it to 'no detail'", async () => {
+      // Error props are non-enumerable — JSON.stringify gives "{}" and the
+      // old enumerable-keys check logged "no detail from player" for a
+      // payload that String(e) can at least name.
+      const { appLogger } = require("../../utils/logger");
+      appLogger.clearLogs();
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+
+      onPlaybackError(new TypeError("") as any);
+      const err = appLogger
+        .getLogs()
+        .find((l: any) => l.level === "ERROR" && l.tag === "Playback");
+      expect(err).toBeTruthy();
+      expect(err!.message).toContain("TypeError");
+      expect(err!.message).not.toContain("no detail from player");
+    });
   });
 
   describe("service wiring", () => {

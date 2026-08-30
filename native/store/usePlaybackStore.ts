@@ -1583,8 +1583,16 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
     let errDetail = e?.message;
     if (!errDetail) {
       try {
-        errDetail =
-          e && Object.keys(e).length ? JSON.stringify(e).slice(0, 300) : "no detail from player";
+        if (e instanceof Error) {
+          // Error props are non-enumerable — JSON.stringify yields "{}".
+          // String(e) names the class even when the message is empty.
+          errDetail = String(e);
+        } else if (e) {
+          const json = JSON.stringify(e);
+          errDetail = json && json !== "{}" ? json.slice(0, 300) : "no detail from player";
+        } else {
+          errDetail = "no detail from player";
+        }
       } catch {
         errDetail = String(e);
       }
