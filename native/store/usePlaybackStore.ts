@@ -1476,6 +1476,12 @@ function clearErrorRecovery() {
 
 function scheduleErrorRetry() {
   if (!_errorRecovery) return;
+  // ONE armed timer per recovery state. Recoveries can genuinely overlap —
+  // foreground, connectivity and a just-fired timer all land together on an
+  // app resume — and when two overlapping failures each scheduled, the
+  // second's overwrite LEAKED the first, still-armed timeout: every overlap
+  // added a live timer (a growing retry storm on the slow cadence).
+  if (_errorRecovery.timer) clearTimeout(_errorRecovery.timer);
   // PEEK here, increment in the callback: attempts counts EXECUTED timed
   // attempts. A foreground/connectivity/manual recovery that consumes a
   // scheduled-but-unfired timer must neither eat a fast rung (its own
@@ -1486,6 +1492,7 @@ function scheduleErrorRetry() {
     attempt < ERROR_RETRY_DELAYS_MS.length ? ERROR_RETRY_DELAYS_MS[attempt] : ERROR_RETRY_SLOW_MS;
   _errorRecovery.timer = setTimeout(() => {
     if (!_errorRecovery) return;
+    _errorRecovery.timer = null;
     _errorRecovery.attempts++;
     recoverPlaybackIfNeeded("timer").catch(() => {});
   }, delay);

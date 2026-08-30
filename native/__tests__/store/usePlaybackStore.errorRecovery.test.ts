@@ -366,6 +366,36 @@ describe("usePlaybackStore playback-error recovery", () => {
       ).toBe(true);
     });
 
+    it("overlapping failed recoveries leave exactly ONE armed timer (no leak, no retry storm)", async () => {
+      // Foreground, connectivity, and a just-fired timer genuinely coincide
+      // on an app resume. When two overlapping failures each scheduled, the
+      // second's overwrite leaked the first, still-armed timeout — every
+      // overlap added a live timer and the slow tail became a retry storm.
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      mockState.mockResolvedValue({ state: "error" } as any);
+      mockRetry
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockRejectedValueOnce(new Error("blocked"))
+        .mockResolvedValue(undefined);
+
+      onPlaybackError({ message: "boom" });
+      // Two recoveries in flight together, both failing — each re-arms, and
+      // the second arm must replace (not leak) the first.
+      await Promise.all([
+        recoverPlaybackIfNeeded("foreground"),
+        recoverPlaybackIfNeeded("connectivity"),
+      ]);
+      expect(mockRetry).toHaveBeenCalledTimes(2);
+      // Exactly ONE timer survives: the 2s rung fires once and succeeds.
+      mockPlay.mockClear();
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(mockRetry).toHaveBeenCalledTimes(3);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      // No leaked second timer fires later.
+      await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(mockRetry).toHaveBeenCalledTimes(3);
+    });
+
     it("a foreground recovery succeeding before any timer fired reports 0 timed attempts", async () => {
       const { appLogger } = require("../../utils/logger");
       appLogger.clearLogs();
