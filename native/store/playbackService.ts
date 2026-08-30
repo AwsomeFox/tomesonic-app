@@ -25,7 +25,7 @@ let _serviceWired = false;
 // reconnect-triggered recovery.
 export function onConnectivityChanged(state: { isConnected?: boolean | null } | null | undefined) {
   if (!state?.isConnected) return;
-  recoverPlaybackIfNeeded().catch(() => {});
+  recoverPlaybackIfNeeded("connectivity").catch(() => {});
   try {
     const { flushPendingSyncs } = require("../utils/progressSync");
     flushPendingSyncs().catch(() => {});

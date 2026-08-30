@@ -70,7 +70,7 @@ export default function App() {
   useEffect(() => {
     if (isConnected) {
       flushPendingSyncs().catch(() => {});
-      recoverPlaybackIfNeeded().catch(() => {});
+      recoverPlaybackIfNeeded("connectivity").catch(() => {});
     }
   }, [isConnected]);
 
@@ -96,7 +96,7 @@ export default function App() {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         flushPendingSyncs().catch(() => {});
-        recoverPlaybackIfNeeded().catch(() => {});
+        recoverPlaybackIfNeeded("foreground").catch(() => {});
         // Sync the UI with a session Android Auto may have started (or resumed)
         // while the app was backgrounded/killed, so the progress bars reflect
         // the live position instead of sitting frozen.

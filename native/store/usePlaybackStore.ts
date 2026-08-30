@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import { AppState } from "react-native";
 import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react-native-track-player";
+import { appLogger } from "../utils/logger";
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
@@ -18,6 +20,13 @@ let _lastPausedAt: number | null = null;
 // Token the current queue's stream URLs were built with (see prepare) — lets
 // error recovery detect a rotation and rebuild URLs instead of retrying 401s.
 let _preparedToken: string | null = null;
+// How the CURRENT queue's track URLs resolved (local files vs streamed) —
+// context for the playback-error log lines in Settings → Logs. "stream" at a
+// chapter edge with the app backgrounded is the boundary-death fingerprint
+// (the clip buffer legally ends at the boundary; the next item's first load
+// needs network the OS may deny a backgrounded app); "local" errors point
+// somewhere else entirely.
+let _queueSource: "local" | "stream" | "mixed" | null = null;
 
 // --- Server progress sync bookkeeping (module-level, one active session at a time) ---
 // Seconds of actual listening accumulated since the last successful/queued sync.
@@ -1442,6 +1451,18 @@ function saveSessionPositionNow(position: number) {
 // regained also funnel into recoverPlaybackIfNeeded, since background JS
 // timers are throttled and may fire late.
 const ERROR_RETRY_DELAYS_MS = [2000, 10000, 30000];
+// After the bounded ladder, a SLOW indefinite tail. The field case that
+// forced it: app backgrounded by another app, a STREAMED chapter queue dies
+// exactly at the clip boundary (the buffer legally ends at the clip; the
+// next item's first load needs network the OS can deny a backgrounded app)
+// — the three rungs burned out while the denial persisted, and playback then
+// stayed dead until the user happened to foreground the app (whose recovery
+// hook fixed it instantly). The tail keeps trying for as long as the wedged
+// session stays loaded: recoverPlaybackIfNeeded stands down by itself when
+// the player is healthy, and prepare/close/manual-play all clear the
+// recovery state, so the only thing an extra attempt can do is bring a
+// dead-but-wanted stream back. One player-state read + retry per minute.
+const ERROR_RETRY_SLOW_MS = 60_000;
 let _errorRecovery: {
   resume: boolean; // was playback active when the error hit?
   attempts: number;
@@ -1455,12 +1476,11 @@ function clearErrorRecovery() {
 
 function scheduleErrorRetry() {
   if (!_errorRecovery) return;
-  // Out of automatic attempts — a manual play (see play()) or a
-  // foreground/connectivity recover call can still finish the job.
-  if (_errorRecovery.attempts >= ERROR_RETRY_DELAYS_MS.length) return;
-  const delay = ERROR_RETRY_DELAYS_MS[_errorRecovery.attempts++];
+  const attempt = _errorRecovery.attempts++;
+  const delay =
+    attempt < ERROR_RETRY_DELAYS_MS.length ? ERROR_RETRY_DELAYS_MS[attempt] : ERROR_RETRY_SLOW_MS;
   _errorRecovery.timer = setTimeout(() => {
-    recoverPlaybackIfNeeded().catch(() => {});
+    recoverPlaybackIfNeeded("timer").catch(() => {});
   }, delay);
 }
 
@@ -1472,6 +1492,25 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
   if (!st.currentSession || st.isCasting) return;
   console.warn("[PlaybackStore] PlaybackError", e?.code, e?.message);
   const wasPlaying = st.isPlaying;
+  // Field-visible diagnostics (Settings → Logs): the "pauses at the end of
+  // every chapter" reports could never tell us WHICH error the player hit —
+  // console.warn only reaches adb. Position/chapter/queue-source/app-state
+  // say whether a report matches the backgrounded-streamer boundary
+  // fingerprint (stream queue, background app, position at a chapter edge)
+  // or is something new.
+  try {
+    const ch =
+      st.chapterQueue && st.chapters.length
+        ? chapterIndexAt(st.chapters, st.position) + 1
+        : 0;
+    appLogger.error(
+      `Player error${e?.code ? ` [${e.code}]` : ""}: ${e?.message || "unknown"} ` +
+        `(pos ${Math.round(st.position)}s${ch ? `, ch ${ch}/${st.chapters.length}` : ""}, ` +
+        `${_queueSource || "unknown"} queue, app ${AppState.currentState}, ` +
+        `${wasPlaying ? "was playing" : "was paused"})`,
+      "Playback"
+    );
+  } catch {}
   // The store position stays ~1s fresh even backgrounded (native progress
   // events) — persist it now so a process kill during the outage can't lose
   // it, and so a cold-start restore resumes where the stream died.
@@ -1489,8 +1528,11 @@ export function onPlaybackError(e?: { code?: string; message?: string }) {
 
 // Re-prepares an errored player and resumes if the error interrupted active
 // playback. Safe to call any time — it no-ops unless an unrecovered error is
-// pending. Returns true when a recovery actually ran.
-export async function recoverPlaybackIfNeeded(): Promise<boolean> {
+// pending. Returns true when a recovery actually ran. `trigger` is purely
+// diagnostic (Settings → Logs): which signal completed the recovery says a
+// lot — "foreground" recoveries with failed "timer" attempts before them are
+// the OS-denies-background-network fingerprint.
+export async function recoverPlaybackIfNeeded(trigger: string = "manual"): Promise<boolean> {
   const rec = _errorRecovery;
   const st = usePlaybackStore.getState();
   if (!rec || !st.currentSession || st.isCasting) return false;
@@ -1504,6 +1546,7 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
     // this call.
     const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
     if (ps && ps.state !== State.Error && ps.state !== State.None) {
+      appLogger.info(`Player recovered on its own (${trigger} check stood down)`, "Playback");
       _errorRecovery = null;
       return false;
     }
@@ -1521,6 +1564,7 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
       const resume = rec.resume;
       _errorRecovery = null;
       console.log("[PlaybackStore] Token rotated mid-session — rebuilding stream URLs.");
+      appLogger.info(`Token rotated mid-session — rebuilding stream URLs (${trigger})`, "Playback");
       return usePlaybackStore
         .getState()
         .preparePlaybackSession({ ...st.currentSession, currentTime: st.position }, resume);
@@ -1530,10 +1574,16 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
       await TrackPlayer.play();
       usePlaybackStore.setState({ isPlaying: true });
     }
+    appLogger.info(
+      `Playback recovered via ${trigger} after ${rec.attempts} timed attempt(s)` +
+        `${rec.resume ? ", resumed" : ""}`,
+      "Playback"
+    );
     _errorRecovery = null;
     return true;
-  } catch (err) {
+  } catch (err: any) {
     // Still down (e.g. network not back yet) — keep backing off.
+    appLogger.warn(`Recovery attempt (${trigger}) failed: ${err?.message || err}`, "Playback");
     scheduleErrorRetry();
     return false;
   }
@@ -2651,9 +2701,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // fallback fires with a completed record present, say so and demote the
       // record to a retryable failure so the item page tells the truth.
       let streamedDespiteDownload = false;
+      let localTrackCount = 0;
+      let streamTrackCount = 0;
       const resolveTrackUrl = (track: any, idx: number): string | null => {
         const local = localForTrack(track, idx);
-        if (local) return local;
+        if (local) {
+          localTrackCount++;
+          return local;
+        }
+        streamTrackCount++;
         if (download) streamedDespiteDownload = true;
         return absoluteUrl(track.contentUrl);
       };
@@ -2752,6 +2808,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (tracksToLoad.length === 0) {
         throw new Error("No playback tracks found in session");
       }
+      _queueSource =
+        streamTrackCount === 0 ? "local" : localTrackCount === 0 ? "stream" : "mixed";
 
       if (streamedDespiteDownload && download) {
         // Tell the user NOW (they believe this book is on-device) and make
@@ -3069,6 +3127,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         if (ps && (ps.state === State.Error || ps.state === State.None)) {
           clearErrorRecovery();
           await TrackPlayer.retry();
+          appLogger.info("Errored player re-prepared by manual play", "Playback");
         }
       } catch {}
     }
