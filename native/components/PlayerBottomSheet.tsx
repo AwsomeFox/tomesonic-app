@@ -550,7 +550,6 @@ export default function PlayerBottomSheet() {
     PX,
     COVER_SIZE_EXP,
     TOP_BAR_Y,
-    TOPBAR_TO_SOURCE,
     SOURCE_TO_COVER,
     COVER_TO_BARS,
     BOOK_ROW_H,
@@ -585,6 +584,10 @@ export default function PlayerBottomSheet() {
     insetTop: insets.top,
     insetBottom: insets.bottom,
     showBookProgress: showPlayerBookProgress !== false,
+    // Text-driven boxes (source label, title block, pill) grow with the OS
+    // font scale (clamped to the 1.3 text cap inside the module) — a fixed
+    // title box put the transport ON the caption at large font sizes.
+    fontScale: win.fontScale,
   });
   // The util's overflow flag is a geometry ESTIMATE from dp constants. It can
   // UNDER-detect when OS font/display scaling makes the pill or labels taller
@@ -1230,25 +1233,46 @@ export default function PlayerBottomSheet() {
                     <Icon name="more-vert" size={24} color={colors.onSecondaryContainer} />
                   </Pressable>
                 </View>
-              </View>
 
-              {/* Source label */}
-              <View style={{ marginTop: TOPBAR_TO_SOURCE + extraTop, justifyContent: "center" }}>
-                <Text maxFontSizeMultiplier={1.3}
+                {/* Source label — INSIDE the top-bar band, centered between the
+                    corner buttons (that center was dead space on every screen);
+                    parking it here raises the cover a full label row + gap,
+                    which height-starved screens spend on art. Absolute so it
+                    stays out of the row's space-between math, inset past both
+                    button clusters so it can never sit under them; pointer-
+                    Events none keeps the bar's touch targets whole. */}
+                <View
+                  pointerEvents="none"
                   style={{
-                    color: colors.onSurfaceVariant,
-                    textAlign: "center",
-                    fontSize: 12,
-                    fontWeight: "500",
-                    letterSpacing: 1.5,
+                    position: "absolute",
+                    left: 56 + 8,
+                    right: 48 + 8 + 48 + 8,
+                    top: 0,
+                    bottom: 0,
+                    justifyContent: "center",
                   }}
                 >
-                  {sourceLabel}
-                </Text>
+                  <Text
+                    maxFontSizeMultiplier={1.3}
+                    numberOfLines={1}
+                    style={{
+                      color: colors.onSurfaceVariant,
+                      textAlign: "center",
+                      fontSize: 12,
+                      fontWeight: "500",
+                      letterSpacing: 1.5,
+                    }}
+                  >
+                    {sourceLabel}
+                  </Text>
+                </View>
               </View>
 
-              {/* Cover Art Placeholder (absolute layout overlay handles actual artwork rendering) */}
-              <View style={{ height: COVER_SIZE_EXP, marginTop: SOURCE_TO_COVER }} />
+              {/* Cover Art Placeholder (absolute layout overlay handles actual
+                  artwork rendering). extraTop rides here now that the source
+                  label lives in the bar — tablet centering moves the
+                  cover→pill block, never the bar. */}
+              <View style={{ height: COVER_SIZE_EXP, marginTop: SOURCE_TO_COVER + extraTop }} />
 
               {/* Book progress row: elapsed | wave | -remaining. The classic
                   flanking layout — each bar carries its own time labels
@@ -1780,37 +1804,21 @@ export default function PlayerBottomSheet() {
               <Pressable onPress={() => setPlayerExpanded(false)} accessibilityRole="button" accessibilityLabel="Collapse player" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                 <Icon name="chevron-down" size={28} color={colors.onSecondaryContainer} />
               </Pressable>
+              {/* Same right cluster as portrait: Cast + the ⋮ overflow menu.
+                  View book details, Want to Read, and Stop-and-close live in
+                  the shared overflow modal — one menu, identical in both
+                  orientations. */}
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 <Pressable onPress={() => { try { CastContext.showCastDialog(); } catch (err) { console.warn("Cast picker failed", err); } }} accessibilityRole="button" accessibilityLabel="Cast to device" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                   <View pointerEvents="none"><CastButton style={{ width: 28, height: 28, tintColor: colors.onSecondaryContainer }} /></View>
                 </Pressable>
                 <Pressable
-                  onPress={() => {
-                    setPlayerExpanded(false);
-                    const targetId = currentSession?.libraryItemId || currentSession?.libraryItem?.id || currentSession?.id;
-                    if (targetId) setTimeout(() => { if (navigationRef.isReady()) (navigationRef.navigate as any)("ItemDetail", { itemId: targetId }); }, 300);
-                  }}
+                  onPress={() => { setShowOverflow(true); }}
                   accessibilityRole="button"
-                  accessibilityLabel="View book details"
+                  accessibilityLabel="More options"
                   style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
                 >
-                  <Icon name="book" size={22} color={colors.onSecondaryContainer} />
-                </Pressable>
-                {/* Want-to-Read heart + Stop are surfaced in landscape too —
-                    Stop is the only in-player dismissal, so a finished book
-                    couldn't be closed at all without it when rotated. */}
-                {favItemId ? (
-                  <Pressable onPress={() => { toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="heart" size={22} color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer} style={{ opacity: isFav ? 1 : 0.45 }} />
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => { setPlayerExpanded(false); closePlayback().catch(() => {}); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Stop and close player"
-                  style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
-                >
-                  <Icon name="close" size={22} color={colors.onSecondaryContainer} />
+                  <Icon name="more-vert" size={24} color={colors.onSecondaryContainer} />
                 </Pressable>
               </View>
             </View>
@@ -1875,8 +1883,11 @@ export default function PlayerBottomSheet() {
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: LS_T_GAP, marginTop: 10 }}>
                   <CircleButton icon="skip-previous" iconSize={22} size={LS_SIDE_BTN} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
                   <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: LS_PLAY_BTN, height: LS_PLAY_BTN, borderRadius: isPlaying ? Math.round(LS_PLAY_BTN * 0.3) : LS_PLAY_BTN / 2, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
-                    {/* 36 at the 72dp design size — tracks a shrunken button. */}
+                  <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: LS_PLAY_BTN, height: LS_PLAY_BTN, borderRadius: isPlaying ? LS_PLAY_BTN / 2 : Math.round(LS_PLAY_BTN * (20 / 88)), backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                    {/* Shape parity with portrait's playProgress mapping:
+                        PLAYING = circle, paused = rounded square (radius 20/88
+                        of the edge, portrait's expanded square ratio). Icon: 36
+                        at the 72dp design size, tracking a shrunken button. */}
                     <Icon name={isPlaying ? "pause" : "play"} size={Math.min(36, Math.round(LS_PLAY_BTN / 2))} color={colors.onPrimary} />
                   </Pressable>
                   <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />

@@ -820,29 +820,41 @@ describe("PlayerBottomSheet — landscape layout", () => {
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
 
-  // Parity with portrait: the landscape header must carry Stop (the only
-  // in-player dismissal), or a finished book can't be closed when the phone is
-  // rotated. Read-from-here was removed (reading is reached via ItemDetail).
-  it("landscape header has Stop (no Read-from-here), and Stop closes playback", async () => {
-    const closePlayback = jest.fn().mockResolvedValue(undefined);
-    seedPlayer({ isPlayerExpanded: true, closePlayback });
-    await render(<PlayerBottomSheet />);
-    await goLandscape();
+  // Parity with portrait: the landscape header carries the same ⋮ overflow menu,
+  // and Stop (the only in-player dismissal) lives inside it — otherwise a
+  // finished book can't be closed while the phone is rotated. Read-from-here
+  // was removed from both layouts (reading is reached via ItemDetail).
+  it("landscape ⋮ opens the shared overflow, and Stop closes playback", async () => {
+    jest.useFakeTimers();
+    try {
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      seedPlayer({ isPlayerExpanded: true, closePlayback });
+      await render(<PlayerBottomSheet />);
+      await goLandscape();
 
-    // Portrait + landscape subtrees both render, but portrait Stop button is inside
-    // the collapsed overflow modal, so it is not rendered on mount.
-    expect(
-      screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
-    ).toBe(1);
-    // Read-from-here is gone from both layouts.
-    expect(
-      screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
-    ).toBe(0);
+      // No direct Stop button anywhere — it only exists inside the overflow
+      // modal, which isn't rendered until ⋮ is pressed.
+      expect(
+        screen.queryAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
+      ).toBe(0);
+      // Read-from-here is gone from both layouts.
+      expect(
+        screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
+      ).toBe(0);
 
-    // The visible (landscape) Stop closes playback.
-    const stops = screen.getAllByLabelText("Stop and close player");
-    await fireEvent.press(stops[stops.length - 1]);
-    expect(closePlayback).toHaveBeenCalled();
+      // Portrait + landscape subtrees both render a ⋮; the landscape one comes
+      // last in tree order. Either opens the single shared overflow modal.
+      const more = screen.getAllByLabelText("More options");
+      await fireEvent.press(more[more.length - 1]);
+      await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
+      expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
+      expect(closePlayback).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("hides the landscape full player from TalkBack while collapsed", async () => {
