@@ -73,8 +73,12 @@ function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCar
   const podcastEpisodeFraction = useUserStore((s) =>
     isPodcast && item?.id ? latestPodcastFraction(s.mediaProgress, item.id) : 0
   );
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
-  const activeDownloads = useDownloadStore((s) => s.activeDownloads);
+  // Per-id download selectors, same reasoning as the progress entry above: the
+  // whole-map reference changes on EVERY download progress write, which used to
+  // re-render every mounted card for the whole life of any download. The
+  // boolean/entry only change when THIS item's download state does.
+  const isDownloaded = useDownloadStore((s) => !!(item?.id && s.completedDownloads[item.id]));
+  const activeDownload = useDownloadStore((s) => (item?.id ? s.activeDownloads[item.id] : undefined)) ?? null;
 
   // Press feedback: a subtle spring scale-down makes taps feel responsive.
   const scale = useSharedValue(1);
@@ -134,8 +138,6 @@ function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCar
   const showAudioBar = audioBarFraction > 0 && !isFinished;
   const showEbookBar = ebookProgressPercent > 0 && !isEbookFinished;
 
-  const isDownloaded = !!(item?.id && completedDownloads[item.id]);
-  const activeDownload = item?.id ? activeDownloads[item.id] : null;
   const isDownloading =
     !!activeDownload && (activeDownload.status === "downloading" || activeDownload.status === "pending");
   const downloadPct = Math.round((activeDownload?.progress ?? 0) * 100);

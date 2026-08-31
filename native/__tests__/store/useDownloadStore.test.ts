@@ -130,6 +130,30 @@ describe("useDownloadStore", () => {
       useDownloadStore.getState().updateDownloadProgress("nope", "track_0", 10, 100);
       expect(useDownloadStore.getState().activeDownloads["nope"]).toBeUndefined();
     });
+
+    // Native progress callbacks arrive many times per second, and every store
+    // write replaces the activeDownloads map reference — re-rendering every
+    // subscriber (each mounted BookCard, the item screens, the downloads
+    // screen). The write is gated on what subscribers actually display.
+    it("skips the store write while the integer percent is unchanged, then writes on the boundary", () => {
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 400, 1000);
+      const before = useDownloadStore.getState().activeDownloads;
+      // +1 byte: still 40% — the map reference must NOT be replaced.
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 401, 1000);
+      expect(useDownloadStore.getState().activeDownloads).toBe(before);
+      // Crossing the next percent writes, carrying the CURRENT bytes.
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 410, 1000);
+      const after = useDownloadStore.getState().activeDownloads;
+      expect(after).not.toBe(before);
+      expect(after["item1"].parts[0].bytesDownloaded).toBe(410);
+    });
+
+    it("always writes the pending→downloading flip, even below the first percent", () => {
+      // 1 byte of 1000 rounds to 0% — but the status change must land
+      // immediately, or the UI shows "queued" well into the download.
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 1, 1000);
+      expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("downloading");
+    });
   });
 
   describe("completeDownloadPart", () => {

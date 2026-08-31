@@ -131,6 +131,7 @@ jest.mock("../../navigation/navigationRef", () => ({
 
 import { CastContext } from "react-native-google-cast";
 import PlayerBottomSheet from "../../components/PlayerBottomSheet";
+import * as playerLayoutModule from "../../utils/playerLayout";
 import { computePlayerLayout } from "../../utils/playerLayout";
 import { navigationRef } from "../../navigation/navigationRef";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -820,29 +821,41 @@ describe("PlayerBottomSheet — landscape layout", () => {
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
 
-  // Parity with portrait: the landscape header must carry Stop (the only
-  // in-player dismissal), or a finished book can't be closed when the phone is
-  // rotated. Read-from-here was removed (reading is reached via ItemDetail).
-  it("landscape header has Stop (no Read-from-here), and Stop closes playback", async () => {
-    const closePlayback = jest.fn().mockResolvedValue(undefined);
-    seedPlayer({ isPlayerExpanded: true, closePlayback });
-    await render(<PlayerBottomSheet />);
-    await goLandscape();
+  // Parity with portrait: the landscape header carries the same ⋮ overflow menu,
+  // and Stop (the only in-player dismissal) lives inside it — otherwise a
+  // finished book can't be closed while the phone is rotated. Read-from-here
+  // was removed from both layouts (reading is reached via ItemDetail).
+  it("landscape ⋮ opens the shared overflow, and Stop closes playback", async () => {
+    jest.useFakeTimers();
+    try {
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      seedPlayer({ isPlayerExpanded: true, closePlayback });
+      await render(<PlayerBottomSheet />);
+      await goLandscape();
 
-    // Portrait + landscape subtrees both render, but portrait Stop button is inside
-    // the collapsed overflow modal, so it is not rendered on mount.
-    expect(
-      screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
-    ).toBe(1);
-    // Read-from-here is gone from both layouts.
-    expect(
-      screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
-    ).toBe(0);
+      // No direct Stop button anywhere — it only exists inside the overflow
+      // modal, which isn't rendered until ⋮ is pressed.
+      expect(
+        screen.queryAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
+      ).toBe(0);
+      // Read-from-here is gone from both layouts.
+      expect(
+        screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
+      ).toBe(0);
 
-    // The visible (landscape) Stop closes playback.
-    const stops = screen.getAllByLabelText("Stop and close player");
-    await fireEvent.press(stops[stops.length - 1]);
-    expect(closePlayback).toHaveBeenCalled();
+      // Portrait + landscape subtrees both render a ⋮; the landscape one comes
+      // last in tree order. Either opens the single shared overflow modal.
+      const more = screen.getAllByLabelText("More options");
+      await fireEvent.press(more[more.length - 1]);
+      await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
+      expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
+      expect(closePlayback).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("hides the landscape full player from TalkBack while collapsed", async () => {
@@ -1100,5 +1113,35 @@ describe("PlayerBottomSheet — finish-line confetti", () => {
       usePlaybackStore.setState({ position: 3599.5 } as any);
     });
     expect(countParticles(screen.toJSON())).toBe(0);
+  });
+});
+
+describe("PlayerBottomSheet — position tick isolation", () => {
+  // The ~1s playback tick must re-render only the live-position leaves
+  // (PlayerBarsBlock / MiniChapterWave), never the whole four-subtree player —
+  // a top-level `position` subscription here re-rendered the entire sheet,
+  // over every screen, once a second for the life of a playing session, and
+  // that periodic JS-thread stall was a scroll/animation hitch app-wide.
+  it("a position write updates the time labels without re-rendering the player shell", async () => {
+    seedPlayer({ isPlayerExpanded: true, isPlaying: true });
+    await render(<PlayerBottomSheet />);
+
+    // The shell calls computePlayerLayout on every render — a clean spy after
+    // mount means "the shell did not render again".
+    const layoutSpy = jest.spyOn(playerLayoutModule, "computePlayerLayout");
+    layoutSpy.mockClear();
+
+    await act(async () => {
+      usePlaybackStore.setState({ position: 761 } as any); // tick: 700 → 761
+    });
+
+    // Leaves ticked: book elapsed 12:41, chapter elapsed 2:41 (761 - 600).
+    // (The raw labels are deliberately a11y-hidden — spoken forms live on the
+    // row/scrubber — so the query must include hidden elements.)
+    expect(screen.getAllByText("12:41", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2:41", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    // Shell did not re-render.
+    expect(layoutSpy).not.toHaveBeenCalled();
+    layoutSpy.mockRestore();
   });
 });

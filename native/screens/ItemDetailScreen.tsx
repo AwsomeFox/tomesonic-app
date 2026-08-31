@@ -70,6 +70,10 @@ try {
   Sharing = null;
 }
 
+// Stable empty result for the podcast-gated download-map selectors below — a
+// fresh {} per call would defeat the gate (new reference every store write).
+const EMPTY_DOWNLOAD_MAP: Record<string, any> = {};
+
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
 // expiresAt with 0 for "no expiry" — never null).
 const SHARE_EXPIRY_OPTIONS: { label: string; ms: number }[] = [
@@ -205,19 +209,31 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [error, setError] = useState<string | null>(null);
   const hasSession = currentSession !== null;
 
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
-  const activeDownloads = useDownloadStore((s) => s.activeDownloads);
   const cancelDownload = useDownloadStore((s) => s.cancelDownload);
   const removeDownload = useDownloadStore((s) => s.removeDownload);
 
+  // Per-id download selectors — the maps' references change on every download
+  // progress write, which re-rendered this whole screen for the life of ANY
+  // download (other items' included). These only change when THIS item's
+  // download state does.
   // NOT downloaded while an active row exists for the same id — a poisoned
   // dual-state made the a11y label say "Delete download" over a progress
   // spinner (and press ran the delete flow mid-download).
-  const isDownloaded = !!(item?.id && completedDownloads[item.id] && !activeDownloads[item.id]);
+  const isDownloaded = useDownloadStore(
+    (s) => !!(item?.id && s.completedDownloads[item.id] && !s.activeDownloads[item.id])
+  );
   // A failed download stays in activeDownloads with status "failed" — it must
   // NOT read as "downloading" (that rendered an infinite spinner here) but as
   // a retryable error, matching BookCard's handling.
-  const downloadStatus = item?.id ? activeDownloads[item.id]?.status : undefined;
+  const downloadStatus = useDownloadStore((s) =>
+    item?.id ? s.activeDownloads[item.id]?.status : undefined
+  );
+  // Podcast episode rows need the whole maps (entries keyed per-episode under
+  // composite ids) — subscribe them podcast-gated so a BOOK detail screen
+  // returns stable empties and never re-renders for map churn.
+  const isPodcastItem = item?.mediaType === "podcast";
+  const activeDownloads = useDownloadStore((s) => (isPodcastItem ? s.activeDownloads : EMPTY_DOWNLOAD_MAP));
+  const completedDownloads = useDownloadStore((s) => (isPodcastItem ? s.completedDownloads : EMPTY_DOWNLOAD_MAP));
   const isDownloading = downloadStatus === "downloading" || downloadStatus === "pending";
   const isDownloadFailed = downloadStatus === "failed";
 
@@ -239,7 +255,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     return liveAt >= itemAt ? { ...itemProgress, ...liveProgress } : itemProgress;
   }, [liveProgress, itemProgress]);
   const isFinished = !!progress?.isFinished;
-  const activeDownload = item?.id ? activeDownloads[item.id] : null;
+  const activeDownload =
+    useDownloadStore((s) => (item?.id ? s.activeDownloads[item.id] : undefined)) ?? null;
   const downloadPct =
     activeDownload && Number.isFinite(activeDownload.progress)
       ? Math.round(activeDownload.progress * 100)
@@ -1155,7 +1172,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // What media this exact item has, and what a matched sibling item supplies.
   // Podcasts carry episodes (not tracks), so hasAudio() would be false — treat
   // them as playable and never fuzzy-match them against books.
-  const isPodcastItem = item?.mediaType === "podcast";
+  // (isPodcastItem is declared up with the download selectors it also gates.)
   const selfHasAudio = isPodcastItem || hasAudio(item);
   const selfHasEbook = itemHasEbook(item);
   const selfEbookFormat = getEbookFormat(item);

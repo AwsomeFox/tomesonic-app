@@ -48,6 +48,18 @@ export interface PlayerLayoutInput {
    * this as `showPlayerBookProgress !== false` (undefined defaults to true).
    */
   showBookProgress: boolean;
+  /**
+   * OS font scale (useWindowDimensions().fontScale). Clamped to [1, 1.3] —
+   * 1.3 is the maxFontSizeMultiplier every text row in the player caps at.
+   * Text boxes whose height is text-driven (source label, title block, the
+   * bottom pill) scale with it; at 1 every value is bit-identical to the
+   * design. This is the exception to "fontScale is not an input": the title
+   * block's three stacked lines physically outgrew their fixed box at large
+   * font scale, and the absolute cascade then placed the transport ON TOP of
+   * the caption (field screenshot) — the scroll fallback can't help because
+   * overlap, not overflow, was the failure.
+   */
+  fontScale?: number;
 }
 
 export interface PlayerLayout {
@@ -113,11 +125,9 @@ export interface PlayerLayout {
   // views from these SAME fields (never re-hardcoded literals), so the two
   // coordinate systems can't drift. Compact mode changes the VALUES here;
   // the structure is identical.
-  /** Top bar bottom → source label gap (the label's marginTop, sans extraTop). */
-  TOPBAR_TO_SOURCE: number;
-  /** Source label row height. */
+  /** Source label row height (rides INSIDE the 56dp top-bar band, centered). */
   SOURCE_LABEL_H: number;
-  /** Source label bottom → cover top gap. */
+  /** Top bar bottom → cover top gap. */
   SOURCE_TO_COVER: number;
   /**
    * Cover bottom → first progress-bar row gap. The old separate numeric info
@@ -145,12 +155,11 @@ export interface PlayerLayout {
   /** Bars → title gap (both modes). */
   SCRUBBER_TO_TITLE: number;
   /**
-   * Title + author (+ chapter caption) block height. FIXED, not font-scale
-   * aware: the rows inside it cap their text with maxFontSizeMultiplier 1.3,
-   * which is the assumption that keeps a fixed 64dp box sufficient. (fontScale
-   * is deliberately NOT an input here; the component separately guards runaway
-   * real-world text via its measured-overflow/scroll fallback.) Kept at 64
-   * even in compact mode — text safety beats density.
+   * Title + author (+ chapter caption) block height: 64dp at font scale 1,
+   * scaled by the clamped fontScale input (the three stacked capped lines
+   * grow with it, and the absolute cascade places the transport off this
+   * box — a fixed box put the transport ON the caption at 1.3). Identical in
+   * compact mode — text safety beats density.
    */
   TITLE_H: number;
   /** Title → transport gap. */
@@ -242,7 +251,13 @@ export function computePlayerLayout({
   insetTop,
   insetBottom,
   showBookProgress,
+  fontScale = 1,
 }: PlayerLayoutInput): PlayerLayout {
+  // Text-box scale: matches the maxFontSizeMultiplier 1.3 cap, never shrinks
+  // below the design (accessibility "small" stays at design geometry). A
+  // non-finite input (NaN/Infinity would survive the min/max and poison every
+  // downstream height) falls back to the design scale.
+  const fs = Number.isFinite(fontScale) ? Math.min(1.3, Math.max(1, fontScale)) : 1;
   // Responsive layout for the expanded player. Rather than stretching edge to
   // edge, the content lives in a centered, max-width column (PW) so it stays
   // balanced on tablets (Pixel Tablet portrait is ~800dp wide); on phones PW ==
@@ -271,20 +286,22 @@ export function computePlayerLayout({
   const PX = (screenWidth - PW) / 2; // column left inset
   const TOP_BAR_Y = insetTop + 8;
 
-  // Vertical space the cover→pill block may occupy: below the top bar and the
-  // source-label rhythm, above the chapters sheet's PERMANENT peek handle
-  // (PEEK_HANDLE_H above the bottom inset), with 8dp breathing room. Budgeting
-  // the peek here is the foldable fix: near-square screens used to park the
-  // transport/pill under the peeking sheet because every bound stopped at the
-  // safe-area bottom. This is also the tablet-centering denominator, so a
-  // centered block stays inside the same bounds the fit check uses.
-  // (The source rhythm — 12 + 20 + 8 — is mode-independent, so availH is too.)
-  const TOPBAR_TO_SOURCE = 12;          // top bar bottom → source label
-  const SOURCE_LABEL_H = 20;            // source label row
-  const SOURCE_TO_COVER = 8;            // source label bottom → cover top
+  // The source label (LOCAL/STREAMING) lives INSIDE the 56dp top-bar band,
+  // vertically centered between the corner buttons — that center was dead
+  // space on every screen, and parking the label there raises the cover by a
+  // full label row + gap (~32dp), which height-starved screens spend on art.
+  const SOURCE_LABEL_H = Math.round(20 * fs); // source label row (in-bar)
+  const SOURCE_TO_COVER = 8;                  // top bar bottom → cover top
+  // Vertical space the cover→pill block may occupy: below the top bar (the
+  // source label rides inside it), above the chapters sheet's PERMANENT peek
+  // handle (PEEK_HANDLE_H above the bottom inset), with 8dp breathing room.
+  // Budgeting the peek here is the foldable fix: near-square screens used to
+  // park the transport/pill under the peeking sheet because every bound
+  // stopped at the safe-area bottom. This is also the tablet-centering
+  // denominator, so a centered block stays inside the same bounds the fit
+  // check uses.
   const availH =
-    screenHeight - (TOP_BAR_Y + 56) -
-    (TOPBAR_TO_SOURCE + SOURCE_LABEL_H + SOURCE_TO_COVER) -
+    screenHeight - (TOP_BAR_Y + 56) - SOURCE_TO_COVER -
     insetBottom - PEEK_HANDLE_H - 8;
 
   // Natural cover (the old sizing) — what a roomy screen shows.
@@ -303,11 +320,14 @@ export function computePlayerLayout({
     const BOOK_BAR_BOX = showBookProgress ? BOOK_ROW_H + BARS_GAP : 0;
     const SCRUBBER_H = 36;
     const SCRUBBER_TO_TITLE = compact ? 12 : 20;
-    const TITLE_H = 64;
+    // Text-driven boxes scale with the (clamped) OS font scale — the title
+    // block stacks THREE capped text lines, and a fixed 64 put the transport
+    // on top of the caption at font scale 1.3.
+    const TITLE_H = Math.round(64 * fs);
     const TITLE_TO_TRANSPORT = compact ? 8 : 12;
     const TRANSPORT_H = t.play;
     const TRANSPORT_TO_PILL = compact ? 8 : 12;
-    const PILL_H = compact ? 48 : 56;
+    const PILL_H = Math.round((compact ? 48 : 56) * fs);
     // Everything below the cover, summed. The cover is the block's one
     // flexible box — this fixed remainder is what the adaptive sizing
     // subtracts out.
@@ -365,8 +385,10 @@ export function computePlayerLayout({
   // Floored so centering can never push a block that exactly fits half a dp
   // past the fit boundary on fractionally-measured screens.
   const extraTop = isTablet ? Math.max(0, Math.floor((availH - CONTENT_BLOCK_H) / 2)) : 0;
-  const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + TOPBAR_TO_SOURCE + extraTop;
-  const COVER_Y_EXP = SOURCE_LABEL_Y + SOURCE_LABEL_H + SOURCE_TO_COVER;
+  // In-bar: centered in the 56dp band, anchored to the bar (extraTop moves
+  // only the cover→pill block, never the bar or its label).
+  const SOURCE_LABEL_Y = TOP_BAR_Y + (56 - SOURCE_LABEL_H) / 2;
+  const COVER_Y_EXP = TOP_BAR_Y + 56 + SOURCE_TO_COVER + extraTop;
   // Top of the book bar row. When the book row is hidden this is where the
   // chapter scrubber sits instead (BOOK_BAR_BOX is 0 in that mode).
   const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + COVER_TO_BARS;
@@ -412,7 +434,6 @@ export function computePlayerLayout({
     PLAY_X,
     JUMP_FWD_X,
     SKIP_NEXT_X,
-    TOPBAR_TO_SOURCE,
     SOURCE_LABEL_H,
     SOURCE_TO_COVER,
     COVER_TO_BARS,

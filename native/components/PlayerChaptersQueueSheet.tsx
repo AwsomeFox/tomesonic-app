@@ -65,7 +65,14 @@ function secondsToTimestamp(seconds: number) {
  */
 export { PEEK_HANDLE_H };
 
-export default function PlayerChaptersQueueSheet({
+// Memoized: the sheet is mounted permanently under the player (the peek
+// handle) and renders the full chapter list — an unrelated player re-render
+// (a modal toggling, a session field changing) must not re-reconcile hundreds
+// of chapter rows. Every prop is referentially stable between real changes
+// (store arrays/actions, setState setters, a SharedValue, primitives).
+export default React.memo(PlayerChaptersQueueSheet);
+
+function PlayerChaptersQueueSheet({
   mainPlayerProgress,
   chapters,
   currentChapterIndex,
