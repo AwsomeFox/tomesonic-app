@@ -322,6 +322,12 @@ export default function PlayerChaptersQueueSheet({
               style={{ marginRight: 10, marginTop: 4 }}
             />
             <Text
+              // The handle box is FIXED at PEEK_HANDLE_H (the whole player
+              // cascade budgets against that number) — cap the label's font
+              // scaling so huge OS font sizes stay legible inside it instead
+              // of clipping.
+              maxFontSizeMultiplier={1.4}
+              numberOfLines={1}
               style={{
                 flex: 1,
                 fontSize: 15,

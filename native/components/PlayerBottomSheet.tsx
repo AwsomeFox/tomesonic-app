@@ -81,6 +81,7 @@ function spokenTime(seconds: number) {
 function CircleButton({
   icon,
   iconSize = 22,
+  size = 56,
   onPress,
   disabled,
   label,
@@ -88,6 +89,9 @@ function CircleButton({
 }: {
   icon: any;
   iconSize?: number;
+  /** Button edge length — layout-driven (playerLayout) so narrow display-scaled
+   * columns shrink the row instead of overflowing the screen edges. */
+  size?: number;
   onPress: () => void;
   disabled?: boolean;
   label: string;
@@ -97,13 +101,17 @@ function CircleButton({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      // Same slop as the portrait transport overlays: when the layout shrinks
+      // the visuals below the 44dp guideline (degenerate windows), the touch
+      // area outlives them.
+      hitSlop={6}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled: !!disabled }}
       style={{
-        width: 56,
-        height: 56,
-        borderRadius: 28,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
         backgroundColor: colors.secondaryContainer,
         alignItems: "center",
         justifyContent: "center",
@@ -111,7 +119,9 @@ function CircleButton({
     >
       <Icon
         name={icon}
-        size={iconSize}
+        // Glyph tracks a shrunken button (unchanged at the 56dp design size,
+        // where size/2 >= the passed 22/24).
+        size={Math.min(iconSize, Math.round(size / 2))}
         color={
           disabled
             ? withAlpha(colors.onSecondaryContainer, 0.4)
@@ -556,6 +566,18 @@ export default function PlayerBottomSheet() {
     COVER_Y_EXP,
     TITLE_Y_EXP,
     TRANSPORT_Y_EXP,
+    compact,
+    SIDE_BTN,
+    PLAY_BTN,
+    SIDE_TOP,
+    SKIP_PREV_X,
+    JUMP_BACK_X,
+    PLAY_X,
+    JUMP_FWD_X,
+    SKIP_NEXT_X,
+    LS_SIDE_BTN,
+    LS_PLAY_BTN,
+    LS_T_GAP,
     contentOverflows: contentOverflowsEstimate,
   } = computePlayerLayout({
     screenWidth,
@@ -795,20 +817,28 @@ export default function PlayerBottomSheet() {
     };
   });
 
-  // Morph Play/Pause Button
+  // Morph Play/Pause Button. Expanded geometry comes from playerLayout
+  // (PLAY_X/PLAY_BTN) — the row scales down as one unit on narrow
+  // display-scaled columns instead of running off the screen edges.
   const animatedPlayPauseStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     const leftCollapsed = screenWidth - 122;
-    const leftExpanded = PX + (PW - 88) / 2;
+    const leftExpanded = PLAY_X;
     const topCollapsed = 6;
     const topExpanded = TRANSPORT_Y_EXP;
 
-    const width = interpolate(p, [0, 1], [56, 88]);
-    const height = interpolate(p, [0, 1], [56, 88]);
+    const width = interpolate(p, [0, 1], [56, PLAY_BTN]);
+    const height = interpolate(p, [0, 1], [56, PLAY_BTN]);
 
-    // Border radius morphs between rounded square (playProgress=0) and circle (playProgress=1)
+    // Border radius morphs between rounded square (playProgress=0) and circle
+    // (playProgress=1); the expanded values track the button size (20/44 at
+    // the 88dp design size).
     const collapsedRadius = interpolate(playProgress.value, [0, 1], [16, 28]);
-    const expandedRadius = interpolate(playProgress.value, [0, 1], [20, 44]);
+    const expandedRadius = interpolate(
+      playProgress.value,
+      [0, 1],
+      [Math.round(PLAY_BTN * (20 / 88)), PLAY_BTN / 2]
+    );
     const borderRadius = interpolate(p, [0, 1], [collapsedRadius, expandedRadius]);
 
     return {
@@ -820,11 +850,11 @@ export default function PlayerBottomSheet() {
     };
   });
 
-  // Scale Play/Pause icon
+  // Scale Play/Pause icon (target: half the expanded button, 44 at design 88)
   const animatedPlayIconStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     return {
-      transform: [{ scale: interpolate(p, [0, 1], [1, 44 / 30]) }],
+      transform: [{ scale: interpolate(p, [0, 1], [1, PLAY_BTN / 2 / 30]) }],
     };
   });
 
@@ -833,79 +863,85 @@ export default function PlayerBottomSheet() {
   const animatedReplayStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     const leftCollapsed = screenWidth - 176;
-    const leftExpanded = PX + (PW - 88) / 2 - 72;
+    const leftExpanded = JUMP_BACK_X;
     const topCollapsed = 12;
-    const topExpanded = TRANSPORT_Y_EXP + 16;
+    const topExpanded = TRANSPORT_Y_EXP + SIDE_TOP;
 
     return {
-      width: interpolate(p, [0, 1], [44, 56]),
-      height: interpolate(p, [0, 1], [44, 56]),
+      width: interpolate(p, [0, 1], [44, SIDE_BTN]),
+      height: interpolate(p, [0, 1], [44, SIDE_BTN]),
       left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
       top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      borderRadius: interpolate(p, [0, 1], [22, 28]),
+      borderRadius: interpolate(p, [0, 1], [22, SIDE_BTN / 2]),
     };
   });
 
-  // Morph Skip Previous Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
+  // Morph Skip Previous Button (fade in/out, centered in the transport row)
   const animatedSkipPreviousStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    // Fully OFF-screen while collapsed (width is 56): the view keeps
+    // Fully OFF-screen while collapsed (width is SIDE_BTN): the view keeps
     // pointerEvents="auto" the moment the player expands, so an on-screen
     // anchor at opacity 0 was an invisible hit area during the animation.
-    const leftCollapsed = -72;
-    const leftExpanded = PX + (PW - 88) / 2 - 144;
+    const leftCollapsed = -(SIDE_BTN + 16);
+    const leftExpanded = SKIP_PREV_X;
     const topCollapsed = 12;
-    const topExpanded = TRANSPORT_Y_EXP + 16;
+    const topExpanded = TRANSPORT_Y_EXP + SIDE_TOP;
 
     return {
-      width: 56,
-      height: 56,
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      borderRadius: 28,
+      width: SIDE_BTN,
+      height: SIDE_BTN,
+      // Position rides the SAME [0.8, 1] window as the fade: the button is
+      // invisible below 0.8 anyway, and a p-range position would otherwise
+      // park an invisible-but-tappable target mid-flight over the cover
+      // while pointerEvents is already "auto".
+      left: interpolate(p, [0.8, 1], [leftCollapsed, leftExpanded], Extrapolation.CLAMP),
+      top: interpolate(p, [0.8, 1], [topCollapsed, topExpanded], Extrapolation.CLAMP),
+      borderRadius: SIDE_BTN / 2,
       opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };
   });
 
-  // Morph Skip Next Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
+  // Morph Skip Next Button (fade in/out, centered in the transport row)
   const animatedSkipNextStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    // Fully off-screen right (mirror of skip-previous above).
+    // Fully off-screen right (mirror of skip-previous above, same
+    // fade-window position gating).
     const leftCollapsed = screenWidth + 16;
-    const leftExpanded = PX + (PW - 88) / 2 + 176;
+    const leftExpanded = SKIP_NEXT_X;
     const topCollapsed = 12;
-    const topExpanded = TRANSPORT_Y_EXP + 16;
+    const topExpanded = TRANSPORT_Y_EXP + SIDE_TOP;
 
     return {
-      width: 56,
-      height: 56,
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      borderRadius: 28,
+      width: SIDE_BTN,
+      height: SIDE_BTN,
+      left: interpolate(p, [0.8, 1], [leftCollapsed, leftExpanded], Extrapolation.CLAMP),
+      top: interpolate(p, [0.8, 1], [topCollapsed, topExpanded], Extrapolation.CLAMP),
+      borderRadius: SIDE_BTN / 2,
       opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };
   });
   const animatedForwardStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     const leftCollapsed = screenWidth - 56;
-    const leftExpanded = PX + (PW - 88) / 2 + 104;
+    const leftExpanded = JUMP_FWD_X;
     const topCollapsed = 12;
-    const topExpanded = TRANSPORT_Y_EXP + 16;
+    const topExpanded = TRANSPORT_Y_EXP + SIDE_TOP;
 
     return {
-      width: interpolate(p, [0, 1], [44, 56]),
-      height: interpolate(p, [0, 1], [44, 56]),
+      width: interpolate(p, [0, 1], [44, SIDE_BTN]),
+      height: interpolate(p, [0, 1], [44, SIDE_BTN]),
       left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
       top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      borderRadius: interpolate(p, [0, 1], [22, 28]),
+      borderRadius: interpolate(p, [0, 1], [22, SIDE_BTN / 2]),
     };
   });
 
-  // Scale Replay/Forward icons
+  // Scale Replay/Forward icons (26/24 at the 56dp design size, tracking the
+  // side-button scale so glyphs never crowd a shrunken button)
   const animatedSmallIconStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     return {
-      transform: [{ scale: interpolate(p, [0, 1], [1, 26 / 24]) }],
+      transform: [{ scale: interpolate(p, [0, 1], [1, (26 / 24) * (SIDE_BTN / 56)]) }],
     };
   });
 
@@ -1316,15 +1352,15 @@ export default function PlayerBottomSheet() {
                 }}
               >
                 {/* Skip previous placeholder */}
-                <View style={{ width: 56, height: 56 }} />
+                <View style={{ width: SIDE_BTN, height: SIDE_BTN }} />
                 {/* Replay placeholder */}
-                <View style={{ width: 56, height: 56 }} />
+                <View style={{ width: SIDE_BTN, height: SIDE_BTN }} />
                 {/* Play/Pause placeholder */}
-                <View style={{ width: 88, height: 88 }} />
+                <View style={{ width: PLAY_BTN, height: PLAY_BTN }} />
                 {/* Forward placeholder */}
-                <View style={{ width: 56, height: 56 }} />
+                <View style={{ width: SIDE_BTN, height: SIDE_BTN }} />
                 {/* Skip next placeholder */}
-                <View style={{ width: 56, height: 56 }} />
+                <View style={{ width: SIDE_BTN, height: SIDE_BTN }} />
               </View>
 
               {/* Consolidated bottom pill: Speed, Sleep Timer, Bookmarks. The
@@ -1339,6 +1375,10 @@ export default function PlayerBottomSheet() {
                 onSleep={() => { setShowSleepTimer(true); }}
                 onBookmarks={() => { setShowBookmarks(true); }}
                 marginTop={TRANSPORT_TO_PILL}
+                // Height-starved screens (display scaling, near-square
+                // foldables) run the compressed rhythm — the pill's trimmed
+                // padding is what PILL_H budgets for in that mode.
+                compact={compact}
               />
             </ScrollView>
         </Animated.View>
@@ -1829,14 +1869,18 @@ export default function PlayerBottomSheet() {
                   </View>
                 ) : null}
 
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 10 }}>
-                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
-                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { playPause().catch(() => {}); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
-                    <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
+                {/* Sized by playerLayout into the pane width (LS_PANE_W) — the
+                    fixed 360dp design span overflowed narrow display-scaled
+                    landscape panes exactly like the portrait row did. */}
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: LS_T_GAP, marginTop: 10 }}>
+                  <CircleButton icon="skip-previous" iconSize={22} size={LS_SIDE_BTN} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
+                  <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: LS_PLAY_BTN, height: LS_PLAY_BTN, borderRadius: isPlaying ? Math.round(LS_PLAY_BTN * 0.3) : LS_PLAY_BTN / 2, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                    {/* 36 at the 72dp design size — tracks a shrunken button. */}
+                    <Icon name={isPlaying ? "pause" : "play"} size={Math.min(36, Math.round(LS_PLAY_BTN / 2))} color={colors.onPrimary} />
                   </Pressable>
-                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
-                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
+                  <CircleButton icon="skip-next" iconSize={22} size={LS_SIDE_BTN} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
                 {/* Same bottom pill as portrait ([speed][Sleep][Bookmark]) —
