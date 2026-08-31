@@ -2,7 +2,7 @@
   "expo": {
     "name": "TomeSonic",
     "slug": "native",
-    "version": "2.10.9",
+    "version": "2.10.10",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "scheme": [
