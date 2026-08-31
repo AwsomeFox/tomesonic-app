@@ -66,6 +66,11 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var sessions: SessionManager
     private var mediaSession: MediaSession? = null
+    // Session-facing chapter presentation: the watch's system media controls
+    // and a BT headset paired to the WATCH read the session player, so a
+    // single-file chaptered book shows per-chapter queue/metadata while the
+    // real player keeps ONE item (see ChapterForwardingPlayer).
+    private var chapterPlayer: ChapterForwardingPlayer? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
@@ -120,18 +125,22 @@ class PlaybackService : MediaSessionService() {
             )
             .build()
 
+        val chapterFwd = ChapterForwardingPlayer(player)
+        chapterPlayer = chapterFwd
+
         sessions = SessionManager(
             player = player,
             // Built from the main executor rather than Dispatchers.Main: the wear
             // module doesn't declare kotlinx-coroutines-android, and this needs
             // nothing but coroutines-core.
             main = mainExecutor.asCoroutineDispatcher(),
-            scope = scope
+            scope = scope,
+            setChapterWindows = { chapterFwd.setChapters(it) }
         )
 
         val openApp = openAppIntent()
 
-        mediaSession = MediaSession.Builder(this, player)
+        mediaSession = MediaSession.Builder(this, chapterFwd)
             .setCallback(SessionCallback())
             .setSessionActivity(openApp)
             // Notification artwork rides the SAME authorized stack as the audio.
@@ -185,6 +194,9 @@ class PlaybackService : MediaSessionService() {
         // synchronously and delivers it on a scope that outlives this service,
         // so teardown never waits on a network round trip.
         if (::sessions.isInitialized) sessions.release()
+        // Empty the window map so the adapter cancels its pending boundary
+        // tick before the underlying player is released.
+        chapterPlayer?.setChapters(emptyList())
         mediaSession?.release()
         mediaSession = null
         if (::player.isInitialized) player.release()

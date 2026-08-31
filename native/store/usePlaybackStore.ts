@@ -320,6 +320,34 @@ function nativeSleepModule(): any | null {
     return null;
   }
 }
+
+// Native per-chapter session presentation (ChapterForwardingPlayer in the
+// track-player patch). When the installed binary has absSetChapterWindows,
+// single-file chaptered books prepare FLAT — one media source, ONE moov
+// sample-table parse at any book length (the OOM-proof shape; see
+// CHAPTER_QUEUE_MAX_SECONDS) — and the service projects a synthetic
+// per-chapter timeline to Android Auto / Bluetooth AVRCP / Wear OS remote
+// controls from these windows. Method-existence gating keeps an OTA-updated
+// JS running on an older binary on the legacy clipped-queue path.
+function nativeChapterWindowsModule(): any | null {
+  try {
+    const RN = require("react-native");
+    if (RN.Platform.OS !== "android") return null;
+    const m = RN.NativeModules?.TrackPlayer;
+    return m?.absSetChapterWindows ? m : null;
+  } catch {
+    return null;
+  }
+}
+function pushNativeChapterWindows(
+  windows: { title: string; startMs: number; endMs: number }[]
+) {
+  try {
+    nativeChapterWindowsModule()
+      ?.absSetChapterWindows?.(JSON.stringify(windows))
+      ?.catch?.(() => {});
+  } catch {}
+}
 function armNativeSleepTimer(seconds: number): boolean {
   const m = nativeSleepModule();
   if (!m || !Number.isFinite(seconds) || seconds <= 0) return false;
@@ -2081,6 +2109,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // whole session. Clear it here; the receiver reports its own state.
       ...(client ? { isBuffering: false } : { castSeekAbs: null }),
     });
+    // While casting the receiver owns playback — the LOCAL session must stop
+    // presenting chapter windows over a paused local player. Windows return
+    // with the next local prepareSession (transfer-back reloads the queue);
+    // until then a book-level presentation is the correct degraded state.
+    if (client) pushNativeChapterWindows([]);
   },
 
   castSeekAbs: null,
@@ -2822,9 +2855,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // CHAPTER_QUEUE_MAX_SECONDS). Over the cap the book plays as one item;
       // chapter UX still runs on `chapters` + absolute positions.
       const bookSeconds = Number(session.duration) || 0;
+      // Native chapter windows supersede the clipped queue entirely: the
+      // session shows per-chapter queue rows/metadata from ONE flat source
+      // (no per-chapter re-parse, no duration cap, carCompat-safe — the
+      // synthetic timeline is stable and only its index advances, unlike the
+      // clipped queue's per-boundary item churn). The clipped path remains
+      // ONLY as the fallback for binaries without the patched service.
+      const nativeChapterWindows = !!nativeChapterWindowsModule();
       const chapterQueue =
         chapters.length > 1 &&
         audioTracks.length === 1 &&
+        !nativeChapterWindows &&
         !carCompat &&
         bookSeconds <= CHAPTER_QUEUE_MAX_SECONDS;
 
@@ -2958,8 +2999,27 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           chapters: chapters.map((ch: any, i: number) => ({
             title: ch.title || `Chapter ${i + 1}`,
             start: ch.start || 0,
+            end: ch.end || 0,
           })),
         })?.catch(() => {});
+      }
+
+      // Feed (or clear) the native ChapterForwardingPlayer's window map. Sent
+      // on EVERY load so a multi-file book, podcast, or legacy clipped queue
+      // can never inherit the previous book's windows. Window positions are in
+      // PLAYER coordinates: the single file's position 0 is the track's
+      // startOffset, so book-absolute chapter times shift down by it.
+      {
+        const winOff = audioTracks.length === 1 ? Number(audioTracks[0].startOffset) || 0 : 0;
+        pushNativeChapterWindows(
+          nativeChapterWindows && chapters.length > 1 && audioTracks.length === 1
+            ? chapters.map((ch: any, i: number) => ({
+                title: ch.title || `Chapter ${i + 1}`,
+                startMs: Math.max(0, Math.round(((ch.start || 0) - winOff) * 1000)),
+                endMs: Math.max(0, Math.round(((ch.end || 0) - winOff) * 1000)),
+              }))
+            : []
+        );
       }
 
       if (streamedDespiteDownload && download) {
@@ -4017,6 +4077,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
 
     await TrackPlayer.reset();
+    // The dismissed book's chapter windows must not survive into whatever the
+    // session presents next (e.g. an Android Auto browse-pool cold start).
+    pushNativeChapterWindows([]);
 
     // Nothing left to recover — a retry firing after close would resurrect
     // the dismissed session's player state.

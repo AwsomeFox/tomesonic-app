@@ -98,7 +98,10 @@ export async function writeAutoChapters(
   payload: {
     itemId: string;
     title: string;
-    chapters: { title: string; start: number }[];
+    // `end` rides along for native consumers that need window extents (the
+    // ChapterForwardingPlayer's cold-start seeding can use it); the browse
+    // rows themselves only read `start`.
+    chapters: { title: string; start: number; end?: number }[];
   } | null
 ) {
   try {

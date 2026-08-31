@@ -424,7 +424,7 @@ index d6e3483..5c2efa8 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork, localArtworkSmall)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-index 13a6c60..249abb4 100644
+index 13a6c60..b9e996e 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 @@ -323,6 +323,33 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
@@ -461,7 +461,7 @@ index 13a6c60..249abb4 100644
      override fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = launchInScope {
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
-@@ -433,6 +460,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+@@ -433,6 +460,39 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
          callback.resolve(null)
      }
  
@@ -480,6 +480,15 @@ index 13a6c60..249abb4 100644
 +        callback.resolve(null)
 +    }
 +
++    // Chapter windows for the session's per-chapter presentation (see
++    // MusicService.absSetChapterWindows / ChapterForwardingPlayer). JSON-string
++    // payload: [{"title","startMs","endMs"}]; empty array clears.
++    override fun absSetChapterWindows(windowsJson: String, callback: Promise) = launchInScope {
++        if (verifyServiceBoundOrReject(callback)) return@launchInScope
++        musicService.absSetChapterWindows(windowsJson)
++        callback.resolve(null)
++    }
++
 +    // ABS "Enhance voice": bind/unbind a native LoudnessEnhancer to the ExoPlayer
 +    // audio session so quiet narration can be AMPLIFIED (ExoPlayer volume is
 +    // clamped to [0,1]). Off by default; JS passes the target gain in millibels.
@@ -492,8 +501,246 @@ index 13a6c60..249abb4 100644
      override fun setVolume(volume: Double, callback: Promise) = launchInScope {
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt
+new file mode 100644
+index 0000000..a049d94
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt
+@@ -0,0 +1,232 @@
++package com.doublesymmetry.trackplayer.service
++
++import android.os.Handler
++import android.os.Looper
++import androidx.media3.common.C
++import androidx.media3.common.ForwardingSimpleBasePlayer
++import androidx.media3.common.Player
++import androidx.media3.common.SimpleBasePlayer
++import com.google.common.util.concurrent.Futures
++import com.google.common.util.concurrent.ListenableFuture
++import timber.log.Timber
++
++/** One synthetic queue entry: a chapter of the single underlying file. */
++data class ChapterWindow(val title: String, val startMs: Long, val endMs: Long)
++
++/**
++ * Presents a single-file audiobook to the MediaSession as a per-chapter queue
++ * WITHOUT per-chapter media sources. The underlying player keeps ONE item (one
++ * moov parse, flat memory at any book length — the whole point, see the
++ * chapter-queue OOM notes in usePlaybackStore); this wrapper re-maps only the
++ * session-facing presentation: a timeline of N chapter windows, chapter-relative
++ * position/duration, and chapter titles as the current metadata. Android Auto's
++ * queue, Bluetooth AVRCP track info, the media notification and Wear OS remote
++ * controls all read this player, so they see chapters; every read the app's own
++ * code performs goes to the real player and stays absolute.
++ *
++ * Action routing contract: the wrapped player here is KotlinAudio's
++ * InnerForwardingPlayer, whose transport methods (play/pause/seekTo/stop/...)
++ * emit RNTP events for JS instead of acting — JS stays the single authority for
++ * every action, exactly as without this wrapper. Chapter-window seeks are
++ * therefore translated to ABSOLUTE positions and issued as plain seekTo(ms)
++ * (→ one JS SEEK event); next/previous arrive here already resolved against the
++ * synthetic timeline by BasePlayer, so a Bluetooth/Auto "next" lands on the next
++ * chapter natively even while the JS thread is asleep in the background.
++ *
++ * Boundary mechanics: nothing in the underlying player emits an event when
++ * playback rolls across a synthetic boundary (it is one continuous file), so a
++ * self-armed Handler tick invalidates state just after each upcoming chapter
++ * end. SimpleBasePlayer's state diff then sees the previous window's position
++ * at/past its duration and synthesizes DISCONTINUITY_REASON_AUTO_TRANSITION +
++ * MEDIA_ITEM_TRANSITION_REASON_AUTO — indistinguishable from a real queue
++ * advance to every controller.
++ */
++class ChapterForwardingPlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
++
++    private val handler = Handler(player.applicationLooper)
++    private var chapters: List<ChapterWindow> = emptyList()
++    private val boundaryTick = Runnable { invalidateState() }
++
++    /**
++     * Swap the underlying player (fakePlayer → real player at setupPlayer).
++     * Runs synchronously when already on the player looper so the caller can
++     * release the old player immediately after this returns.
++     */
++    fun swapPlayer(newPlayer: Player) {
++        val block = Runnable {
++            try {
++                setPlayer(newPlayer)
++            } catch (t: Throwable) {
++                Timber.w(t, "ChapterForwardingPlayer swap failed")
++            }
++        }
++        if (Looper.myLooper() == handler.looper) block.run() else handler.post(block)
++    }
++
++    /**
++     * Install (or with an empty list clear) the chapter map. Windows only take
++     * effect while the underlying timeline has exactly one item — multi-file
++     * books and podcast queues pass through untouched.
++     */
++    fun setChapters(list: List<ChapterWindow>) {
++        handler.post {
++            chapters = list.filter { it.endMs > it.startMs }.sortedBy { it.startMs }
++            Timber.d("ChapterForwardingPlayer windows=%d", chapters.size)
++            invalidateState()
++        }
++    }
++
++    private fun chapterIndexAt(absMs: Long): Int {
++        var idx = 0
++        for (i in chapters.indices) {
++            if (chapters[i].startMs <= absMs) idx = i else break
++        }
++        return idx
++    }
++
++    override fun getState(): SimpleBasePlayer.State {
++        val s = super.getState()
++        val map = chapters
++        val active = map.isNotEmpty() && !s.timeline.isEmpty && s.timeline.windowCount == 1
++        scheduleBoundaryTick(s, map, active)
++        if (!active) {
++            // Session-granted transport commands are force-set per controller by
++            // MusicService from the JS capabilities, but SimpleBasePlayer drops
++            // any seek whose command is missing from ITS state — union the
++            // next/previous commands so controller presses keep reaching the
++            // wrapped player (→ JS events) exactly as they did pre-wrapper.
++            return s.buildUpon()
++                .setAvailableCommands(
++                    s.availableCommands.buildUpon().addAll(
++                        Player.COMMAND_SEEK_TO_NEXT,
++                        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
++                        Player.COMMAND_SEEK_TO_PREVIOUS,
++                        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
++                    ).build()
++                )
++                .build()
++        }
++
++        val realItem = s.timeline.getWindow(0, androidx.media3.common.Timeline.Window()).mediaItem
++        val baseMeta = realItem.mediaMetadata
++        val absPositionSupplier = s.contentPositionMsSupplier
++        val absBufferedSupplier = s.contentBufferedPositionMsSupplier
++        val absNow = absPositionSupplier.get()
++        val idx = chapterIndexAt(absNow)
++        val chStart = map[idx].startMs
++        val chDur = map[idx].endMs - map[idx].startMs
++
++        val windows = map.mapIndexed { i, ch ->
++            val meta = baseMeta.buildUpon()
++                .setTitle(ch.title)
++                .setDisplayTitle(ch.title)
++                .setTrackNumber(i + 1)
++                .setTotalTrackCount(map.size)
++                // NO inline artwork bytes on windows: the real item may carry
++                // the LARGE cover bytes (single-item queue is allowed to), and
++                // inheriting them onto 100+ windows would rebuild the ~1MB
++                // Binder Timeline overflow the clipped queue once hit. The
++                // artworkUri survives and the session's bitmap loader resolves
++                // it once for every row/notification (same URI → one bitmap).
++                .setArtworkData(null, null)
++                .build()
++            SimpleBasePlayer.MediaItemData.Builder("abschap-$i")
++                .setMediaItem(
++                    realItem.buildUpon().setMediaId("abschap-$i").setMediaMetadata(meta).build()
++                )
++                .setMediaMetadata(meta)
++                .setDurationUs((ch.endMs - ch.startMs) * 1000)
++                .setIsSeekable(true)
++                .apply { if (i == idx) setTracks(s.currentTracks) }
++                .build()
++        }
++
++        val out = s.buildUpon()
++            .setPlaylist(windows)
++            .setCurrentMediaItemIndex(idx)
++            // Live suppliers so positions advance between invalidations. No
++            // upper clamp: a position past the window's duration is exactly what
++            // lets the state diff infer AUTO_TRANSITION at a boundary.
++            .setContentPositionMs { maxOf(0L, absPositionSupplier.get() - chStart) }
++            .setContentBufferedPositionMs {
++                (absBufferedSupplier.get() - chStart).coerceIn(0L, chDur)
++            }
++            .setAvailableCommands(
++                s.availableCommands.buildUpon().addAll(
++                    Player.COMMAND_SEEK_TO_NEXT,
++                    Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
++                    Player.COMMAND_SEEK_TO_PREVIOUS,
++                    Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
++                    Player.COMMAND_SEEK_TO_MEDIA_ITEM,
++                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
++                ).build()
++            )
++        if (s.hasPositionDiscontinuity) {
++            // The wrapped player reported an absolute discontinuity position;
++            // restate it relative to the chapter that contains it.
++            val abs = s.discontinuityPositionMs
++            val discIdx = chapterIndexAt(abs)
++            out.setPositionDiscontinuity(
++                s.positionDiscontinuityReason,
++                maxOf(0L, abs - map[discIdx].startMs)
++            )
++        }
++        return out.build()
++    }
++
++    private fun scheduleBoundaryTick(
++        s: SimpleBasePlayer.State,
++        map: List<ChapterWindow>,
++        active: Boolean,
++    ) {
++        handler.removeCallbacks(boundaryTick)
++        if (!active) return
++        if (s.playbackState != Player.STATE_READY || !s.playWhenReady) return
++        val absNow = s.contentPositionMsSupplier.get()
++        val idx = chapterIndexAt(absNow)
++        if (idx >= map.size - 1) return // real STATE_ENDED covers the last window
++        val speed = s.playbackParameters.speed.takeIf { it > 0f } ?: 1f
++        val delayMs = (((map[idx].endMs - absNow) / speed).toLong() + 60L).coerceAtLeast(60L)
++        handler.postDelayed(boundaryTick, delayMs)
++    }
++
++    override fun handleSeek(
++        mediaItemIndex: Int,
++        positionMs: Long,
++        seekCommand: Int,
++    ): ListenableFuture<*> {
++        val map = chapters
++        val underlying = player
++        val active =
++            map.isNotEmpty() &&
++                !underlying.currentTimeline.isEmpty &&
++                underlying.currentTimeline.windowCount == 1
++        if (!active) return super.handleSeek(mediaItemIndex, positionMs, seekCommand)
++        when (seekCommand) {
++            // Jump buttons keep their pre-wrapper JS routing (REWIND/FORWARD
++            // events applying ABSOLUTE jumps), so they still cross chapter
++            // boundaries instead of clamping at the synthetic window edge the
++            // way BasePlayer pre-clamped positionMs would.
++            Player.COMMAND_SEEK_BACK -> underlying.seekBack()
++            Player.COMMAND_SEEK_FORWARD -> underlying.seekForward()
++            else -> {
++                if (mediaItemIndex == C.INDEX_UNSET || mediaItemIndex >= map.size) {
++                    return Futures.immediateVoidFuture()
++                }
++                val rel = if (positionMs == C.TIME_UNSET) 0L else maxOf(0L, positionMs)
++                // Absolute single-arg seek → one JS SEEK event; JS applies it to
++                // the real player like any other remote seek.
++                underlying.seekTo(map[mediaItemIndex].startMs + rel)
++            }
++        }
++        return Futures.immediateVoidFuture()
++    }
++
++    override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
++        // SimpleBasePlayer funnels play()/pause() into setPlayWhenReady, but the
++        // wrapped InnerForwardingPlayer only intercepts play()/pause() — call
++        // those so the PLAY/PAUSE JS events keep firing as before.
++        if (playWhenReady) player.play() else player.pause()
++        return Futures.immediateVoidFuture()
++    }
++}
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..0570696 100644
+index b495b5a..d138c30 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -510,7 +757,7 @@ index b495b5a..0570696 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,7 +63,62 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,7 +63,71 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -519,6 +766,15 @@ index b495b5a..0570696 100644
 +    // their session touch instead of crashing on a released MediaLibrarySession.
 +    @Volatile private var absDestroyed = false
      private lateinit var fakePlayer: ExoPlayer
++    // The session's Player for its WHOLE life: a ChapterForwardingPlayer that
++    // presents a single-file book as per-chapter windows to every controller
++    // (Android Auto queue, Bluetooth AVRCP, Wear remote, notification) while
++    // the real player keeps ONE item — no per-chapter source re-parse (see the
++    // chapter-queue OOM notes). It wraps fakePlayer from onCreate and is
++    // re-pointed at player.forwardingPlayer in setupPlayer, so the session
++    // player object is never reassigned. Null only on the degraded no-session
++    // onCreate path.
++    private var absChapterPlayer: ChapterForwardingPlayer? = null
 +    // A JS-dead Android Auto cold start plays on fakePlayer with a "play:<id>"
 +    // mediaId (see onSetMediaItems / onPlaybackResumption). When JS later comes
 +    // alive, setupPlayer releases fakePlayer — which used to silently stop the
@@ -573,7 +829,7 @@ index b495b5a..0570696 100644
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
      private var sessionCommands: SessionCommands? = null
-@@ -79,10 +136,13 @@ class MusicService : HeadlessJsMediaService() {
+@@ -79,10 +145,13 @@ class MusicService : HeadlessJsMediaService() {
      }
  
      fun getBitmapLoader(): BitmapLoader {
@@ -587,7 +843,7 @@ index b495b5a..0570696 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -92,35 +152,1473 @@ class MusicService : HeadlessJsMediaService() {
+@@ -92,35 +161,1477 @@ class MusicService : HeadlessJsMediaService() {
  
      @ExperimentalCoroutinesApi
      override fun onCreate() {
@@ -676,10 +932,13 @@ index b495b5a..0570696 100644
 -            )
 -            .build()
 +        var built: MediaLibrarySession? = null
++        // Wrap fakePlayer now; setupPlayer swaps the wrapped player underneath
++        // without ever reassigning mediaSession.player.
++        val sessionPlayer = ChapterForwardingPlayer(fakePlayer)
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
 +            try {
-+                built = MediaLibrarySession.Builder(this, fakePlayer, InnerMediaSessionCallback())
++                built = MediaLibrarySession.Builder(this, sessionPlayer, InnerMediaSessionCallback())
 +                    .setId(id)
 +                    .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
 +                    // https://github.com/androidx/media/issues/1218
@@ -712,6 +971,7 @@ index b495b5a..0570696 100644
 +            return
 +        }
 +        mediaSession = built
++        absChapterPlayer = sessionPlayer
 +        // Track connectivity so Android Auto browse flips between the online
 +        // catalog and downloaded-only (and back) via notifyChildrenChanged.
 +        absRegisterNetworkCallback()
@@ -2075,7 +2335,7 @@ index b495b5a..0570696 100644
      enum class AppKilledPlaybackBehavior(val string: String) {
          CONTINUE_PLAYBACK("continue-playback"),
          PAUSE_PLAYBACK("pause-playback"),
-@@ -166,6 +1664,40 @@ class MusicService : HeadlessJsMediaService() {
+@@ -166,6 +1677,40 @@ class MusicService : HeadlessJsMediaService() {
      override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
          onStartCommandIntentValid = intent != null
          Timber.d("onStartCommand: ${intent?.action}, ${intent?.`package`}")
@@ -2116,7 +2376,7 @@ index b495b5a..0570696 100644
          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
              // HACK: this is not supposed to be here. I definitely screwed up. but Why?
              onMediaKeyEvent(intent)
-@@ -206,11 +1738,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1751,83 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -2184,19 +2444,25 @@ index b495b5a..0570696 100644
 +        } catch (e: Exception) {
 +            Timber.w(e, "AA cold-start handoff failed")
 +        }
++        // Re-point the session's ChapterForwardingPlayer at the real playback
++        // chain BEFORE releasing fakePlayer (the swap moves the adapter's
++        // listener off the old player). The session keeps the SAME Player
++        // instance for its whole life — this replaces the old
++        // `mediaSession.player = player.forwardingPlayer` reassignment, and the
++        // JS action routing through InnerForwardingPlayer is preserved because
++        // the adapter forwards every transport call to it.
++        // Degraded onCreate (no session built): absChapterPlayer is null and
++        // the service already stopSelf'd; don't crash the JS bind path.
++        absChapterPlayer?.swapPlayer(player.forwardingPlayer)
          fakePlayer.release()
 -        mediaSession.player = player.forwardingPlayer
-+        // Degraded onCreate (no session built): the service already stopSelf'd;
-+        // don't crash the JS bind path on the uninitialized lateinit.
-+        if (::mediaSession.isInitialized) {
-+            mediaSession.player = player.forwardingPlayer
-+        } else {
++        if (!::mediaSession.isInitialized) {
 +            Timber.e("setupPlayer with no media session (degraded onCreate) — skipping session attach")
 +        }
          observeEvents()
      }
  
-@@ -293,9 +1891,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1910,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -2208,7 +2474,7 @@ index b495b5a..0570696 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1904,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1923,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -2270,7 +2536,7 @@ index b495b5a..0570696 100644
          }
      }
  
-@@ -395,8 +2027,270 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,8 +2046,298 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2312,6 +2578,34 @@ index b495b5a..0570696 100644
 +        absSleepRemaining = absSleepRemainingNow()
 +        absSleepAnchorMs = absSleepNow()
 +        absSleepAnchoredPlaying = player.isPlaying
++    }
++
++    // Chapter windows for the session-facing per-chapter timeline (see
++    // ChapterForwardingPlayer). JS sends [{title,startMs,endMs}] as a JSON
++    // string right after loading a single-file chaptered book, and an empty
++    // array on unload/cast — the string payload keeps the TurboModule spec
++    // change minimal, and malformed input degrades to "no windows" (flat
++    // presentation), never a crash in the playback service.
++    @MainThread
++    fun absSetChapterWindows(windowsJson: String) {
++        val parsed = try {
++            val arr = org.json.JSONArray(windowsJson)
++            (0 until arr.length()).mapNotNull { i ->
++                val o = arr.optJSONObject(i) ?: return@mapNotNull null
++                val start = o.optLong("startMs", -1L)
++                val end = o.optLong("endMs", -1L)
++                if (start < 0 || end <= start) return@mapNotNull null
++                ChapterWindow(
++                    title = o.optString("title").ifEmpty { "Chapter ${i + 1}" },
++                    startMs = start,
++                    endMs = end,
++                )
++            }
++        } catch (e: Exception) {
++            Timber.w(e, "absSetChapterWindows: bad payload")
++            emptyList()
++        }
++        absChapterPlayer?.setChapters(parsed)
 +    }
 +
 +    @MainThread
@@ -2541,7 +2835,7 @@ index b495b5a..0570696 100644
          player.stop()
      }
  
-@@ -449,6 +2343,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2390,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2552,7 +2846,7 @@ index b495b5a..0570696 100644
      }
  
      @MainThread
-@@ -495,6 +2393,24 @@ class MusicService : HeadlessJsMediaService() {
+@@ -495,6 +2440,24 @@ class MusicService : HeadlessJsMediaService() {
          }
      }
  
@@ -2577,7 +2871,7 @@ index b495b5a..0570696 100644
      @MainThread
      fun updateNowPlayingMetadata(bundle: Bundle) {
          updateMetadataForTrack(player.currentIndex, bundle)
-@@ -515,6 +2431,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2478,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2815,7 +3109,7 @@ index b495b5a..0570696 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -530,6 +2677,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -530,6 +2724,18 @@ class MusicService : HeadlessJsMediaService() {
              event.stateChange.collect {
                  emit(MusicEvents.PLAYBACK_STATE, getPlayerStateBundle(it))
  
@@ -2834,7 +3128,7 @@ index b495b5a..0570696 100644
                  if (it == AudioPlayerState.ENDED && player.nextItem == null) {
                      emitQueueEndedEvent()
                  }
-@@ -654,11 +2813,100 @@ class MusicService : HeadlessJsMediaService() {
+@@ -654,11 +2860,100 @@ class MusicService : HeadlessJsMediaService() {
  
          scope.launch {
              event.playbackError.collect {
@@ -2849,10 +3143,10 @@ index b495b5a..0570696 100644
 +                    it.code?.let { c -> putString("code", "android-$c") }
 +                })
 +                absErrRetryArm()
-+            }
-+        }
-+    }
-+
+             }
+         }
+     }
+ 
 +    // --- ABS native playback-error auto-retry -------------------------------
 +    // The app's JS retry ladder is frame-driven on Android and never fires
 +    // while the app is backgrounded, so an errored player used to stay silent
@@ -2908,10 +3202,10 @@ index b495b5a..0570696 100644
 +                    // finished) — recovery is moot; don't tick forever.
 +                    absErrRetryDisarm()
 +                }
-             }
-         }
-     }
- 
++            }
++        }
++    }
++
 +    private fun absErrRetrySchedule() {
 +        absErrRetryHandler.removeCallbacks(absErrRetryRunnable)
 +        absErrRetryHandler.postDelayed(absErrRetryRunnable, absErrRetryDelayMs(absErrRetryAttempt))
@@ -2936,7 +3230,7 @@ index b495b5a..0570696 100644
      private fun getPlaybackErrorBundle(): Bundle {
          val bundle = Bundle()
          val error = playbackError
-@@ -717,7 +2965,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +3012,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2945,7 +3239,7 @@ index b495b5a..0570696 100644
              return
          }
  
-@@ -780,8 +3028,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +3075,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2961,7 +3255,7 @@ index b495b5a..0570696 100644
          return mediaSession
      }
  
-@@ -792,13 +3046,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +3093,50 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -3014,7 +3308,7 @@ index b495b5a..0570696 100644
          super.onDestroy()
      }
  
-@@ -831,24 +3122,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +3169,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -3075,7 +3369,7 @@ index b495b5a..0570696 100644
                  }
  
                  else -> null
-@@ -886,6 +3197,20 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3244,20 @@ class MusicService : HeadlessJsMediaService() {
              val isMediaNotificationController = session.isMediaNotificationController(controller)
              val isAutomotiveController = session.isAutomotiveController(controller)
              val isAutoCompanionController = session.isAutoCompanionController(controller)
@@ -3096,7 +3390,7 @@ index b495b5a..0570696 100644
              emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
                  putString("package", controller.packageName)
                  putBoolean("isMediaNotificationController", isMediaNotificationController)
-@@ -905,24 +3230,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +3277,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -3357,7 +3651,7 @@ index b495b5a..0570696 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3475,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3522,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -3387,7 +3681,7 @@ index b495b5a..0570696 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3507,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3554,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3403,7 +3697,7 @@ index b495b5a..0570696 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3523,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3570,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -3520,10 +3814,10 @@ index d85e2c7..db6b437 100644
      }
  
 diff --git a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
-index a5dcd75..84e8e15 100644
+index a5dcd75..c277c87 100644
 --- a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
 +++ b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
-@@ -6,6 +6,15 @@ export interface Spec extends TurboModule {
+@@ -6,6 +6,21 @@ export interface Spec extends TurboModule {
    setupPlayer(options: UnsafeObject): Promise<void>;
    updateOptions(options: UnsafeObject): Promise<void>;
  
@@ -3536,10 +3830,16 @@ index a5dcd75..84e8e15 100644
 +  // session to amplify quiet narration (gain in millibels; Android only).
 +  absSetVoiceBoost(enabled: boolean, gainMb: number): Promise<void>;
 +
++  // ABS chapter windows: per-chapter session presentation for single-file
++  // books (Android Auto queue / Bluetooth AVRCP / Wear remote) without
++  // per-chapter media sources. JSON string [{"title","startMs","endMs"}];
++  // empty array clears (Android only).
++  absSetChapterWindows(windowsJson: string): Promise<void>;
++
    // player api
    load(track: UnsafeObject): Promise<number | void>;
    reset(): Promise<void>;
-@@ -39,6 +48,11 @@ export interface Spec extends TurboModule {
+@@ -39,6 +54,11 @@ export interface Spec extends TurboModule {
      trackIndex: number,
      metadata: UnsafeObject
    ): Promise<void>;

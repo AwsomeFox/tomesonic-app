@@ -259,7 +259,11 @@ class SessionManager(
     private val absClient: AbsClient = Graph.absClient,
     private val credsRepository: CredsRepository = Graph.credsRepository,
     private val queue: OfflineProgressQueue = OfflineProgressQueue.shared,
-    private val localSource: () -> LocalPlaybackSource? = { PlaybackWiring.localSource }
+    private val localSource: () -> LocalPlaybackSource? = { PlaybackWiring.localSource },
+    // Feeds the session's ChapterForwardingPlayer: a single-file chaptered
+    // book's window map on load, empty on stop. Defaulted no-op so tests that
+    // construct a SessionManager without a session player are untouched.
+    private val setChapterWindows: (List<ChapterWindow>) -> Unit = {}
 ) {
 
     /**
@@ -364,11 +368,27 @@ class SessionManager(
         val speed = credsRepository.playbackSpeed.first()
         val start = ChapterMath.trackPositionAt(ready.session.tracks, ready.startSeconds)
             ?: ChapterMath.TrackPosition(0, 0.0)
+        // Chapter windows for the session's synthetic per-chapter timeline:
+        // single-file chaptered books only (a chapter can straddle files on a
+        // multi-file book — those keep per-track items, which the synthesized
+        // per-file "Part N" chapters already mirror). PLAYER coordinates — the
+        // single track's startOffset shifts book-absolute times down (usually 0).
+        val chapterWindows = if (ready.items.size == 1 && ready.session.chapters.size > 1) {
+            val off = ready.session.tracks.firstOrNull()?.startOffset ?: 0.0
+            ready.session.chapters.mapNotNull { ch ->
+                val startMs = (((ch.start - off) * 1000.0).toLong()).coerceAtLeast(0L)
+                val endMs = ((ch.end - off) * 1000.0).toLong()
+                if (endMs > startMs) ChapterWindow(ch.title, startMs, endMs) else null
+            }
+        } else {
+            emptyList()
+        }
         withContext(main) {
             player.setMediaItems(ready.items, start.trackIndex, (start.positionSeconds * 1000.0).toLong())
             player.setPlaybackSpeed(speed)
             player.prepare()
             player.play()
+            setChapterWindows(chapterWindows)
         }
 
         PlaybackState.set(ready.session)
@@ -483,6 +503,7 @@ class SessionManager(
         withContext(main) {
             player.stop()
             player.clearMediaItems()
+            setChapterWindows(emptyList())
         }
         PlaybackState.set(null)
     }

@@ -14,6 +14,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.tomesonic.app.automotive.Graph
+import com.tomesonic.app.automotive.playback.ChapterForwardingPlayer
 import com.tomesonic.app.automotive.playback.ControllerOpen
 import com.tomesonic.app.automotive.playback.PlaybackScope
 import com.tomesonic.app.automotive.playback.SessionManager
@@ -54,6 +55,9 @@ class AbsLibraryService : MediaLibraryService() {
     private var librarySession: MediaLibrarySession? = null
     private var browseTree: BrowseTree? = null
     private var sessions: SessionManager? = null
+    // The session's Player: presents single-file chaptered books to the Media
+    // Center as per-chapter windows over ONE real item (ChapterForwardingPlayer).
+    private var chapterPlayer: ChapterForwardingPlayer? = null
 
     /**
      * Command scope for playback work (resolves, flushes, the creds collector).
@@ -121,10 +125,23 @@ class AbsLibraryService : MediaLibraryService() {
         )
         browseTree = tree
 
-        val manager = SessionManager(exo, mainExecutor.asCoroutineDispatcher(), scope)
+        // Session-facing chapter presentation: the Media Center renders the
+        // session player's timeline as its queue, so a single-file chaptered
+        // book shows per-chapter rows/metadata while the real player keeps ONE
+        // item — no per-chapter source re-parse (see ChapterForwardingPlayer).
+        // SessionManager and the syncer keep reading `exo` directly (absolute).
+        val chapterFwd = ChapterForwardingPlayer(exo)
+        chapterPlayer = chapterFwd
+
+        val manager = SessionManager(
+            exo,
+            mainExecutor.asCoroutineDispatcher(),
+            scope,
+            setChapterWindows = { chapterFwd.setChapters(it) }
+        )
         sessions = manager
 
-        librarySession = MediaLibrarySession.Builder(this, exo, LibraryCallback(tree, manager)).build()
+        librarySession = MediaLibrarySession.Builder(this, chapterFwd, LibraryCallback(tree, manager)).build()
 
         // DR-2/DR-3: seed connectivity, restore the last-good root from disk and
         // warm the real one in the background, so the Media Center's first
@@ -163,6 +180,10 @@ class AbsLibraryService : MediaLibraryService() {
         // scope that outlives the service (the donor's ordering, kept exactly).
         sessions?.release()
         sessions = null
+        // Empty the window map so the adapter cancels its pending boundary
+        // tick before the underlying player is released.
+        chapterPlayer?.setChapters(emptyList())
+        chapterPlayer = null
         librarySession?.release()
         librarySession = null
         player?.release()

@@ -95,6 +95,25 @@ Responsibilities:
   `libraryItemId` to JS to run the normal `startPlayback` path so cast/progress/etc.
   all keep working.
 
+## Chapter presentation (ChapterForwardingPlayer)
+Single-file chaptered books no longer build a media source per chapter (every
+clipped item re-parsed the whole file's moov sample table — the boundary-OOM
+class). Instead the queue is ONE flat item and a `ForwardingSimpleBasePlayer`
+subclass (`ChapterForwardingPlayer`, new file in the track-player patch) is the
+MediaSession's player: it projects a synthetic per-chapter timeline (windows,
+chapter-relative position/duration, chapter titles) to every controller —
+Android Auto queue, Bluetooth AVRCP, Wear remote controls, the notification —
+while the real player and all app code stay absolute. JS pushes the window map
+via `absSetChapterWindows` (JSON `[{title,startMs,endMs}]`, empty clears);
+next/previous resolve against the synthetic timeline natively, and window seeks
+reach JS as ordinary absolute SEEK events, so JS remains the action authority.
+The same adapter class is copied into the wear and automotive modules and wired
+into their sessions (windows fed by each `SessionManager`; wear's
+`PlayerConnection`/notification provider translate `abschap-<n>` window items
+back to book-absolute). Multi-file books pass through untouched, and binaries
+without the patched service fall back to the legacy clipped queue (capability
+gate in `usePlaybackStore`).
+
 ## Testing
 Cannot be tested on a plain emulator. Use the **Android Auto Desktop Head Unit (DHU)**:
 `adb forward tcp:5277 tcp:5277` + enable "Head unit server" in Android Auto dev
