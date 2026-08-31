@@ -8,6 +8,7 @@
 import {
   computePlayerLayout,
   MIN_ADAPTIVE_COVER,
+  MIN_COMPACT_COVER,
   PEEK_HANDLE_H,
   PlayerLayoutInput,
 } from "../../utils/playerLayout";
@@ -59,11 +60,12 @@ describe("computePlayerLayout", () => {
         const offDelta = off.CHAPTER_PROGRESS_Y - off.BOOK_PROGRESS_Y;
         expect(onDelta - offDelta).toBe(on.BOOK_BAR_BOX - off.BOOK_BAR_BOX);
         // And the raw numbers: ON inserts the 20dp book row (wave + inline
-        // labels) plus the 12dp gap to the scrubber — 32dp total.
+        // labels) plus the gap to the scrubber — 32dp at the design rhythm,
+        // 28dp when the compact pass tightened BARS_GAP to 8.
         expect(on.BOOK_BAR_BOX).toBe(on.BOOK_ROW_H + on.BARS_GAP);
-        expect(on.BOOK_BAR_BOX).toBe(32);
+        expect(on.BOOK_BAR_BOX).toBe(on.compact ? 28 : 32);
         expect(off.BOOK_BAR_BOX).toBe(0);
-        expect(onDelta - offDelta).toBe(32);
+        expect(onDelta - offDelta).toBe(on.BOOK_BAR_BOX);
         // The scrubber's marginTop reconciles both modes: under the book row
         // it's BARS_GAP; directly under the cover it's COVER_TO_BARS.
         expect(on.SCRUBBER_TOP_GAP).toBe(on.BARS_GAP);
@@ -117,10 +119,11 @@ describe("computePlayerLayout", () => {
         // numeric info row is gone — labels are inline on the bars.
         expect(l.BOOK_PROGRESS_Y - l.COVER_Y_EXP - l.COVER_SIZE_EXP).toBe(l.COVER_TO_BARS);
         // Bar block top → scrubber: the book row's whole box when shown,
-        // nothing when hidden (the scrubber IS the bar block then).
+        // nothing when hidden (the scrubber IS the bar block then). The box
+        // is 20 + BARS_GAP — 32 at the design rhythm, 28 compact.
         expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y).toBe(l.BOOK_BAR_BOX);
         expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y).toBe(
-          showBookProgress ? 20 + 12 : 0
+          showBookProgress ? 20 + l.BARS_GAP : 0
         );
         // Scrubber → title placeholder (TITLE_Y_EXP - CHAPTER_PROGRESS_Y - 36).
         expect(l.TITLE_Y_EXP - l.CHAPTER_PROGRESS_Y - l.SCRUBBER_H).toBe(l.SCRUBBER_TO_TITLE);
@@ -135,7 +138,12 @@ describe("computePlayerLayout", () => {
   });
 
   describe("short-viewport overflow (scroll re-enable)", () => {
-    it("overflows on a short 360x640 phone", () => {
+    it("a short 360x640 phone COMPRESSES instead of scrolling (the display-scale screenshot)", () => {
+      // Pre-ladder behavior: this class of screen kept the natural cover and
+      // flipped scrolling on — which parked the transport under the chapters
+      // peek with nothing hinting that scrolling was even possible (the field
+      // screenshot at large display size). The compact pass now tightens the
+      // rhythm and shrinks the cover until everything fits above the peek.
       const l = computePlayerLayout({
         screenWidth: 360,
         screenHeight: 640,
@@ -143,7 +151,10 @@ describe("computePlayerLayout", () => {
         insetBottom: 0,
         showBookProgress: true,
       });
-      expect(l.contentOverflows).toBe(true);
+      expect(l.compact).toBe(true);
+      expect(l.contentOverflows).toBe(false);
+      expect(l.COVER_SIZE_EXP).toBeGreaterThanOrEqual(MIN_COMPACT_COVER);
+      expect(l.contentBottomY + 8).toBeLessThanOrEqual(640 - 0 - PEEK_HANDLE_H);
     });
 
     it("does not overflow on a tall 412x915 phone", () => {
@@ -162,17 +173,29 @@ describe("computePlayerLayout", () => {
       expect(l.contentOverflows).toBe(false);
     });
 
-    it("flips exactly at the adaptive-cover floor as the viewport shrinks", () => {
-      // 412-wide phone, insets 24/0. Above the floor the cover shrinks to
-      // absorb the missing height (fittedCover >= MIN_ADAPTIVE_COVER), so the
-      // block always fits; one dp below, the cover snaps back to its natural
-      // size and scrolling takes over — the flag must flip on that dp.
+    it("walks the compression ladder as the viewport shrinks: normal → compact → scroll", () => {
+      // 412-wide phone, insets 24/0. Rung 1: the design rhythm holds while
+      // the cover can absorb the missing height down to MIN_ADAPTIVE_COVER.
+      // One dp below that, rung 2: the compact rhythm engages (tighter gaps,
+      // smaller transport/pill) — the freed height even lets the cover grow
+      // back past the rung-1 floor. Rung 3: only when the compact rhythm
+      // can't fit the cover at MIN_COMPACT_COVER does scrolling turn on, with
+      // the cover pinned at the floor (not snapped back to natural) so the
+      // scrolled-away remainder stays small.
       const at = (screenHeight: number) =>
         computePlayerLayout({ screenWidth: 412, screenHeight, insetTop: 24, insetBottom: 0, showBookProgress: true });
-      expect(at(744).COVER_SIZE_EXP).toBe(MIN_ADAPTIVE_COVER); // fitted, at the floor
+      expect(at(744).compact).toBe(false);
+      expect(at(744).COVER_SIZE_EXP).toBe(MIN_ADAPTIVE_COVER); // rung-1 floor
       expect(at(744).contentOverflows).toBe(false);
-      expect(at(743).COVER_SIZE_EXP).toBeGreaterThan(MIN_ADAPTIVE_COVER); // natural again
-      expect(at(743).contentOverflows).toBe(true);
+      expect(at(743).compact).toBe(true); // rung 2 engages
+      expect(at(743).contentOverflows).toBe(false);
+      expect(at(743).COVER_SIZE_EXP).toBeGreaterThanOrEqual(MIN_ADAPTIVE_COVER);
+      expect(at(624).compact).toBe(true);
+      expect(at(624).COVER_SIZE_EXP).toBe(MIN_COMPACT_COVER); // rung-2 floor
+      expect(at(624).contentOverflows).toBe(false);
+      expect(at(623).compact).toBe(true); // rung 3: floor + scroll
+      expect(at(623).COVER_SIZE_EXP).toBe(MIN_COMPACT_COVER);
+      expect(at(623).contentOverflows).toBe(true);
     });
 
     it("bottom-inset flip: 3-button nav (48) shrinks the cover instead of overflowing", () => {
@@ -261,9 +284,10 @@ describe("computePlayerLayout", () => {
       expect(base.SOURCE_LABEL_Y).toBe(base.TOP_BAR_Y + 56 + 12 + base.extraTop);
     });
 
-    it("extraTop is clamped to 0 when the block does not fit (squat 800x760 tablet portrait)", () => {
-      // 800x840 used to be the not-fitting case; folding the numeric row into
-      // the bars freed 26dp, so that block now fits — go squatter.
+    it("squat 800x760 tablet: the compact pass makes the block fit exactly (extraTop 0)", () => {
+      // Pre-ladder this was the extraTop-clamp case (natural cover + scroll).
+      // The compact rhythm now absorbs the shortfall — the cover fills the
+      // remaining room to the dp, so there is nothing left to center.
       const l = computePlayerLayout({
         screenWidth: 800,
         screenHeight: 760,
@@ -272,8 +296,25 @@ describe("computePlayerLayout", () => {
         showBookProgress: true,
       });
       expect(l.isTablet).toBe(true);
+      expect(l.compact).toBe(true);
+      expect(l.contentOverflows).toBe(false);
+      expect(l.CONTENT_BLOCK_H).toBeLessThanOrEqual(l.availH);
+      expect(l.extraTop).toBe(Math.floor((l.availH - l.CONTENT_BLOCK_H) / 2));
+    });
+
+    it("extraTop is clamped to 0 when even the compact block cannot fit (squat 800x640)", () => {
+      const l = computePlayerLayout({
+        screenWidth: 800,
+        screenHeight: 640,
+        insetTop: 24,
+        insetBottom: 24,
+        showBookProgress: true,
+      });
+      expect(l.isTablet).toBe(true);
+      expect(l.compact).toBe(true);
       expect(l.availH).toBeLessThan(l.CONTENT_BLOCK_H);
       expect(l.extraTop).toBe(0);
+      expect(l.contentOverflows).toBe(true);
     });
 
     it("phones never get extraTop", () => {
@@ -304,8 +345,15 @@ describe("computePlayerLayout", () => {
       expect(p.COVER_SIZE_EXP).toBe(Math.min(412 - 80, Math.round(915 * 0.42), 320));
       const t = computePlayerLayout(tablet());
       expect(t.COVER_SIZE_EXP).toBe(Math.min(480 - 80, Math.round(1280 * 0.42), 420));
+      // 360x640 is a compact-mode screen now: the cover is fitted to the
+      // remaining room (availH minus the compact below-cover stack), not the
+      // natural height-limited size.
       const small = computePlayerLayout(phone({ screenWidth: 360, screenHeight: 640, insetBottom: 0 }));
-      expect(small.COVER_SIZE_EXP).toBe(Math.round(640 * 0.42)); // height-limited
+      expect(small.compact).toBe(true);
+      expect(small.COVER_SIZE_EXP).toBe(
+        Math.floor(small.availH - (small.CONTENT_BLOCK_H - small.COVER_SIZE_EXP))
+      );
+      expect(small.COVER_SIZE_EXP).toBeGreaterThanOrEqual(MIN_COMPACT_COVER);
     });
   });
 
@@ -354,6 +402,132 @@ describe("computePlayerLayout", () => {
           dims.screenHeight - dims.insetTop - dims.insetBottom - 56 - 32
         );
       }
+    });
+  });
+
+  describe("transport geometry (the display-scale overflow fix)", () => {
+    // The design row — side 56 / play 88 / 16dp gaps, centered on the play
+    // button — spans 376dp. Display-size scaling drops the dp width below
+    // that, and the old hardcoded offsets ran the skip buttons off BOTH
+    // screen edges (the field screenshot). The row now scales as one unit.
+    it("roomy columns reproduce the original hardcoded design geometry bit-for-bit", () => {
+      for (const dims of [phone(), tablet()]) {
+        const l = computePlayerLayout(dims);
+        expect(l.SIDE_BTN).toBe(56);
+        expect(l.PLAY_BTN).toBe(88);
+        expect(l.T_GAP).toBe(16);
+        expect(l.SIDE_TOP).toBe(16);
+        expect(l.TRANSPORT_H).toBe(88);
+        // The legacy expressions, verbatim:
+        expect(l.PLAY_X).toBe(l.PX + (l.PW - 88) / 2);
+        expect(l.JUMP_BACK_X).toBe(l.PX + (l.PW - 88) / 2 - 72);
+        expect(l.SKIP_PREV_X).toBe(l.PX + (l.PW - 88) / 2 - 144);
+        expect(l.JUMP_FWD_X).toBe(l.PX + (l.PW - 88) / 2 + 104);
+        expect(l.SKIP_NEXT_X).toBe(l.PX + (l.PW - 88) / 2 + 176);
+      }
+    });
+
+    it.each([
+      ["display-scaled 320dp", 320],
+      ["display-scaled 340dp", 340],
+      ["display-scaled 360dp", 360],
+      ["compact 412dp", 412],
+    ])("%s column: the whole row stays inside the column with margin", (_n, screenWidth) => {
+      const l = computePlayerLayout({
+        screenWidth,
+        screenHeight: 640,
+        insetTop: 24,
+        insetBottom: 0,
+        showBookProgress: true,
+      });
+      // Left and right edges clear the column by the 8dp breathing room.
+      expect(l.SKIP_PREV_X).toBeGreaterThanOrEqual(l.PX + 8 - 1);
+      expect(l.SKIP_NEXT_X + l.SIDE_BTN).toBeLessThanOrEqual(l.PX + l.PW - 8 + 1);
+      // Touch targets stay legal, play stays dominant.
+      expect(l.SIDE_BTN).toBeGreaterThanOrEqual(44);
+      expect(l.PLAY_BTN).toBeGreaterThanOrEqual(56);
+      expect(l.PLAY_BTN).toBeGreaterThan(l.SIDE_BTN);
+      // The row is symmetric around the column center.
+      const center = l.PX + l.PW / 2;
+      expect(l.PLAY_X + l.PLAY_BTN / 2).toBeCloseTo(center, 5);
+      expect(center - l.SKIP_PREV_X).toBeCloseTo(l.SKIP_NEXT_X + l.SIDE_BTN - center, 5);
+      // Row height always equals the play button.
+      expect(l.TRANSPORT_H).toBe(l.PLAY_BTN);
+      expect(l.SIDE_TOP).toBe(Math.round((l.PLAY_BTN - l.SIDE_BTN) / 2));
+    });
+
+    it("gaps never exceed the 16dp design gap on ultra-wide columns", () => {
+      const l = computePlayerLayout(tablet({ screenWidth: 1200 }));
+      expect(l.T_GAP).toBe(16);
+    });
+  });
+
+  describe("compact rhythm values", () => {
+    it("compact mode tightens exactly the intended knobs and nothing else", () => {
+      const c = computePlayerLayout({
+        screenWidth: 360,
+        screenHeight: 640,
+        insetTop: 24,
+        insetBottom: 0,
+        showBookProgress: true,
+      });
+      expect(c.compact).toBe(true);
+      expect(c.COVER_TO_BARS).toBe(10);
+      expect(c.BARS_GAP).toBe(8);
+      expect(c.SCRUBBER_TO_TITLE).toBe(12);
+      expect(c.TITLE_TO_TRANSPORT).toBe(8);
+      expect(c.TRANSPORT_TO_PILL).toBe(8);
+      expect(c.PILL_H).toBe(48);
+      // Never-compressed: source rhythm, scrubber touch target, title text box.
+      expect(c.TOPBAR_TO_SOURCE).toBe(12);
+      expect(c.SOURCE_LABEL_H).toBe(20);
+      expect(c.SOURCE_TO_COVER).toBe(8);
+      expect(c.SCRUBBER_H).toBe(36);
+      expect(c.TITLE_H).toBe(64);
+      // Compact transport shrinks toward the 48/72 ideals.
+      expect(c.PLAY_BTN).toBeLessThanOrEqual(72);
+      expect(c.SIDE_BTN).toBeLessThanOrEqual(48);
+    });
+
+    it("roomy screens never see the compact rhythm (design values pinned)", () => {
+      for (const dims of [phone(), tablet()]) {
+        const l = computePlayerLayout(dims);
+        expect(l.compact).toBe(false);
+        expect(l.COVER_TO_BARS).toBe(14);
+        expect(l.BARS_GAP).toBe(12);
+        expect(l.SCRUBBER_TO_TITLE).toBe(20);
+        expect(l.TITLE_TO_TRANSPORT).toBe(12);
+        expect(l.TRANSPORT_TO_PILL).toBe(12);
+        expect(l.PILL_H).toBe(56);
+      }
+    });
+  });
+
+  describe("landscape transport pane sizing", () => {
+    it("the pane budget matches the component's padding arithmetic", () => {
+      const l = computePlayerLayout({
+        screenWidth: 915,
+        screenHeight: 412,
+        insetTop: 0,
+        insetBottom: 24,
+        showBookProgress: true,
+      });
+      // outer 16dp paddings (32) + cover column (LS_COVER + 16) + pane 8dp
+      // paddings (16) — the component's landscape two-pane layout, verbatim.
+      expect(l.LS_PANE_W).toBe(915 - 32 - (l.LS_COVER + 16) - 16);
+    });
+
+    it.each([
+      ["phone landscape 915x412", { screenWidth: 915, screenHeight: 412, insetTop: 0, insetBottom: 24 }],
+      ["short scaled landscape 640x330", { screenWidth: 640, screenHeight: 330, insetTop: 0, insetBottom: 0 }],
+      ["narrow scaled landscape 592x296", { screenWidth: 592, screenHeight: 296, insetTop: 0, insetBottom: 0 }],
+      ["tablet landscape 1280x800", { screenWidth: 1280, screenHeight: 800, insetTop: 24, insetBottom: 24 }],
+    ])("%s: the 5-button row fits the pane", (_n, dims) => {
+      const l = computePlayerLayout({ ...dims, showBookProgress: true });
+      const rowSpan = 4 * l.LS_SIDE_BTN + l.LS_PLAY_BTN + 4 * l.LS_T_GAP;
+      expect(rowSpan).toBeLessThanOrEqual(l.LS_PANE_W);
+      expect(l.LS_SIDE_BTN).toBeGreaterThanOrEqual(44);
+      expect(l.LS_PLAY_BTN).toBeGreaterThanOrEqual(56);
     });
   });
 });

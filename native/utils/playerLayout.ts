@@ -4,8 +4,9 @@
 // device-only bugs were pure arithmetic hiding in that cascade (the book-
 // progress bar's box being omitted crowded the title and clipped the bottom
 // pill). Extracting the math here makes it unit-testable so CI catches the
-// next drift. This is a verbatim extraction of the component's expressions —
-// behavior must be IDENTICAL to what PlayerBottomSheet computed inline.
+// next drift. The component styles its views from these fields ONLY — never
+// re-hardcoded literals — so the cascade, the in-flow placeholders, and the
+// transport button geometry can't disagree.
 
 /**
  * Height of the chapters/queue sheet's collapsed "Chapters & Up Next" handle.
@@ -19,13 +20,19 @@
 export const PEEK_HANDLE_H = 54;
 
 /**
- * Floor for the adaptive cover: on screens too short for the natural cover
- * (near-square foldables, phones with 3-button nav), the cover shrinks until
- * the cascade fits above the peek — but not below this, where the art turns
- * into a thumbnail. Screens that can't fit even this keep their natural cover
- * and fall back to scrolling (contentOverflows).
+ * Floor for the adaptive cover in the NORMAL (design-rhythm) pass: the cover
+ * shrinks to absorb missing height, but not below this. When even this floor
+ * can't fit, the layout does not jump straight to scrolling any more — it
+ * first compresses (see the compact pass below).
  */
 export const MIN_ADAPTIVE_COVER = 220;
+
+/**
+ * Floor for the adaptive cover in the COMPACT pass. Below this the art reads
+ * as a thumbnail; screens that can't fit even this keep a floor-sized cover
+ * and fall back to scrolling (contentOverflows).
+ */
+export const MIN_COMPACT_COVER = 148;
 
 export interface PlayerLayoutInput {
   /** Effective screen width in dp (the component's measured?.w ?? window.width). */
@@ -48,24 +55,64 @@ export interface PlayerLayout {
   isTablet: boolean;
   /** Landscape cover edge: fits the (short) height, capped by width. */
   LS_COVER: number;
+  /** Landscape right-pane inner width (the transport row's budget there). */
+  LS_PANE_W: number;
+  /** Landscape transport: side (skip/jump) button edge. */
+  LS_SIDE_BTN: number;
+  /** Landscape transport: play button edge. */
+  LS_PLAY_BTN: number;
+  /** Landscape transport: gap between buttons. */
+  LS_T_GAP: number;
   /** Content column width (capped at 480 so tablets stay balanced). */
   PW: number;
   /** Content column left inset ((screenWidth - PW) / 2). */
   PX: number;
   /**
    * Expanded cover edge length. Natural size (column/height/tablet-capped),
-   * adaptively shrunk — never below MIN_ADAPTIVE_COVER — on screens where the
-   * natural size would push the bottom pill under the chapters sheet's peek.
+   * adaptively shrunk to fit — through the normal pass (floor
+   * MIN_ADAPTIVE_COVER), then the compact pass (floor MIN_COMPACT_COVER) —
+   * before the scroll fallback ever engages.
    */
   COVER_SIZE_EXP: number;
   /** Top bar (collapse/cast/overflow row) top Y. */
   TOP_BAR_Y: number;
 
+  /**
+   * True when the COMPACT pass is in effect: the design rhythm could not fit
+   * the cover at MIN_ADAPTIVE_COVER (display-size scaling, near-square
+   * foldables, short phones), so gaps tighten and the transport/pill shrink.
+   * Every field below already reflects it — the component just styles from
+   * the fields as always.
+   */
+  compact: boolean;
+
+  // Transport geometry (portrait absolute cascade). The design row —
+  // side 56 / play 88 / 16dp gaps, centered on the play button — spans 376dp
+  // and simply ran off BOTH screen edges once display-size scaling dropped
+  // the dp width below that (the field screenshot: skip prev/next half
+  // off-screen). One uniform scale shrinks the whole row to the column, with
+  // floors that keep touch targets legal.
+  /** Side (skip/jump) button edge length. 56 at design size. */
+  SIDE_BTN: number;
+  /** Play button edge length. 88 at design size (72 compact). */
+  PLAY_BTN: number;
+  /** Gap between transport buttons. 16 at design size. */
+  T_GAP: number;
+  /** Side buttons' top offset inside the row ((PLAY_BTN - SIDE_BTN) / 2). */
+  SIDE_TOP: number;
+  /** Absolute X of each transport button (left edges, centered on play). */
+  SKIP_PREV_X: number;
+  JUMP_BACK_X: number;
+  PLAY_X: number;
+  JUMP_FWD_X: number;
+  SKIP_NEXT_X: number;
+
   // In-flow vertical rhythm — the exact box each section occupies
   // (marginTop + height). The absolute cascade AND the tablet centering
   // height are BOTH derived from these, and the component styles its in-flow
   // views from these SAME fields (never re-hardcoded literals), so the two
-  // coordinate systems can't drift.
+  // coordinate systems can't drift. Compact mode changes the VALUES here;
+  // the structure is identical.
   /** Top bar bottom → source label gap (the label's marginTop, sans extraTop). */
   TOPBAR_TO_SOURCE: number;
   /** Source label row height. */
@@ -102,12 +149,13 @@ export interface PlayerLayout {
    * aware: the rows inside it cap their text with maxFontSizeMultiplier 1.3,
    * which is the assumption that keeps a fixed 64dp box sufficient. (fontScale
    * is deliberately NOT an input here; the component separately guards runaway
-   * real-world text via its measured-overflow/scroll fallback.)
+   * real-world text via its measured-overflow/scroll fallback.) Kept at 64
+   * even in compact mode — text safety beats density.
    */
   TITLE_H: number;
   /** Title → transport gap. */
   TITLE_TO_TRANSPORT: number;
-  /** Transport control row height. */
+  /** Transport control row height (== PLAY_BTN). */
   TRANSPORT_H: number;
   /** Transport → bottom pill gap. */
   TRANSPORT_TO_PILL: number;
@@ -136,10 +184,30 @@ export interface PlayerLayout {
   /** Bottom edge of the in-flow block (pill bottom). */
   contentBottomY: number;
   /**
-   * True when the cascade runs past the visible viewport — the component then
-   * re-enables ScrollView scrolling so the bottom pill stays reachable.
+   * True when the cascade runs past the visible viewport EVEN AFTER the
+   * compact pass — the component then re-enables ScrollView scrolling so the
+   * bottom pill stays reachable.
    */
   contentOverflows: boolean;
+}
+
+/**
+ * Uniformly scale a 5-button transport row (side, side, play, side, side with
+ * equal gaps) into `colWidth`, keeping 8dp of breathing room each side. Floors
+ * keep the buttons legal touch targets (44dp) and the play button dominant
+ * (56dp); whatever width the floors reclaim comes out of the gaps (floor 6).
+ * The gap never exceeds the design 16dp — extra room stays as margin, so a
+ * roomy column reproduces the design geometry bit-for-bit.
+ */
+function transportGeometry(colWidth: number, idealSide: number, idealPlay: number) {
+  const idealGap = 16;
+  const inner = colWidth - 16;
+  const ideal = 4 * idealSide + idealPlay + 4 * idealGap;
+  const s = Math.min(1, inner / ideal);
+  const side = Math.max(44, Math.round(idealSide * s));
+  const play = Math.max(56, Math.round(idealPlay * s));
+  const gap = Math.min(idealGap, Math.max(6, Math.floor((inner - 4 * side - play) / 4)));
+  return { side, play, gap };
 }
 
 export function computePlayerLayout({
@@ -161,40 +229,20 @@ export function computePlayerLayout({
   const LS_COVER = Math.round(
     Math.min(screenHeight - insetTop - insetBottom - 56 - 32, screenWidth * 0.42)
   );
+  // Landscape right pane's inner width: full width minus the outer 16dp
+  // horizontal paddings, the cover column (LS_COVER + 16), and the pane's own
+  // 8dp horizontal paddings. The landscape transport row is sized INTO this —
+  // its old fixed 56/56/72/56/56 + 16dp gaps span (360dp) overflowed the pane
+  // on short display-scaled landscapes.
+  const LS_PANE_W = screenWidth - 32 - (LS_COVER + 16) - 16;
+  const lsT = transportGeometry(LS_PANE_W, 56, 72);
+  const LS_SIDE_BTN = lsT.side;
+  const LS_PLAY_BTN = lsT.play;
+  const LS_T_GAP = lsT.gap;
   const PW = Math.min(screenWidth, 480); // content column width
   const PX = (screenWidth - PW) / 2; // column left inset
   const TOP_BAR_Y = insetTop + 8;
-  // In-flow vertical rhythm below the cover, expressed as the exact box each
-  // section occupies (marginTop + height). The absolute-overlay Y cascade
-  // (SOURCE_LABEL_Y…TRANSPORT_Y_EXP) AND the tablet-centering block height are
-  // BOTH derived from these deltas, so the two coordinate systems can't drift.
-  // The bars carry their time labels INLINE (elapsed left, -remaining right,
-  // flanking the wave) — the old standalone numeric info row is gone. When the
-  // book-progress bar is hidden its whole box (row + gap) drops out and the
-  // chapter scrubber sits directly under the cover.
-  const showBook = showBookProgress;
-  const TOPBAR_TO_SOURCE = 12;          // top bar bottom → source label
-  const SOURCE_LABEL_H = 20;            // source label row
-  const SOURCE_TO_COVER = 8;            // source label bottom → cover top
-  const COVER_TO_BARS = 14;             // cover bottom → first bar row
-  const BOOK_ROW_H = 20;                // book bar row: wave + inline labels (when shown)
-  const BOOK_BAR_H = 12;                // the book wave's own height inside the row
-  const BARS_GAP = 12;                  // book row → chapter scrubber (when shown)
-  const BOOK_BAR_BOX = showBook ? BOOK_ROW_H + BARS_GAP : 0;
-  const SCRUBBER_TOP_GAP = showBook ? BARS_GAP : COVER_TO_BARS; // scrubber row marginTop
-  const SCRUBBER_H = 36;                // chapter scrubber row
-  const SCRUBBER_TO_TITLE = 20;         // comfortable bars → title gap (both modes)
-  const TITLE_H = 64;                   // title+author block (text capped at maxFontSizeMultiplier 1.3 — see interface doc)
-  const TITLE_TO_TRANSPORT = 12;        // title → transport gap
-  const TRANSPORT_H = 88;               // transport control row
-  const TRANSPORT_TO_PILL = 12;         // transport → bottom pill gap
-  const PILL_H = 56;                    // bottom pill (speed / sleep / bookmark)
-  // Everything below the cover, summed. The cover is the block's one flexible
-  // box — this fixed remainder is what the adaptive sizing subtracts out.
-  const BELOW_COVER_H =
-    COVER_TO_BARS + BOOK_BAR_BOX +
-    SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
-    TRANSPORT_TO_PILL + PILL_H;
+
   // Vertical space the cover→pill block may occupy: below the top bar and the
   // source-label rhythm, above the chapters sheet's PERMANENT peek handle
   // (PEEK_HANDLE_H above the bottom inset), with 8dp breathing room. Budgeting
@@ -202,19 +250,87 @@ export function computePlayerLayout({
   // transport/pill under the peeking sheet because every bound stopped at the
   // safe-area bottom. This is also the tablet-centering denominator, so a
   // centered block stays inside the same bounds the fit check uses.
+  // (The source rhythm — 12 + 20 + 8 — is mode-independent, so availH is too.)
+  const TOPBAR_TO_SOURCE = 12;          // top bar bottom → source label
+  const SOURCE_LABEL_H = 20;            // source label row
+  const SOURCE_TO_COVER = 8;            // source label bottom → cover top
   const availH =
     screenHeight - (TOP_BAR_Y + 56) -
     (TOPBAR_TO_SOURCE + SOURCE_LABEL_H + SOURCE_TO_COVER) -
     insetBottom - PEEK_HANDLE_H - 8;
-  // Natural cover (the old sizing), then the adaptive shrink: when the natural
-  // cover would push the pill under the peek but a cover >= MIN_ADAPTIVE_COVER
-  // makes everything fit, size the cover to exactly fill the room instead of
-  // turning scrolling on. Screens short enough to need a smaller-than-floor
-  // cover keep the natural size and scroll (the pre-existing fallback).
+
+  // Natural cover (the old sizing) — what a roomy screen shows.
   const naturalCover = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
-  const fittedCover = Math.floor(availH - BELOW_COVER_H);
-  const COVER_SIZE_EXP =
-    fittedCover >= MIN_ADAPTIVE_COVER ? Math.min(naturalCover, fittedCover) : naturalCover;
+
+  // The rhythm + transport + pill for one mode. Compact tightens the gaps and
+  // shrinks the transport/pill — it is the SECOND lever, pulled only when the
+  // normal pass can't fit the cover at MIN_ADAPTIVE_COVER (display-size
+  // scaling, near-square foldables). SOURCE rhythm, SCRUBBER_H (touch target)
+  // and TITLE_H (text safety) never change.
+  const modeMetrics = (compact: boolean) => {
+    const t = transportGeometry(PW, compact ? 48 : 56, compact ? 72 : 88);
+    const COVER_TO_BARS = compact ? 10 : 14;
+    const BOOK_ROW_H = 20;
+    const BARS_GAP = compact ? 8 : 12;
+    const BOOK_BAR_BOX = showBookProgress ? BOOK_ROW_H + BARS_GAP : 0;
+    const SCRUBBER_H = 36;
+    const SCRUBBER_TO_TITLE = compact ? 12 : 20;
+    const TITLE_H = 64;
+    const TITLE_TO_TRANSPORT = compact ? 8 : 12;
+    const TRANSPORT_H = t.play;
+    const TRANSPORT_TO_PILL = compact ? 8 : 12;
+    const PILL_H = compact ? 48 : 56;
+    // Everything below the cover, summed. The cover is the block's one
+    // flexible box — this fixed remainder is what the adaptive sizing
+    // subtracts out.
+    const BELOW_COVER_H =
+      COVER_TO_BARS + BOOK_BAR_BOX +
+      SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
+      TRANSPORT_TO_PILL + PILL_H;
+    return {
+      t, COVER_TO_BARS, BOOK_ROW_H, BARS_GAP, BOOK_BAR_BOX, SCRUBBER_H,
+      SCRUBBER_TO_TITLE, TITLE_H, TITLE_TO_TRANSPORT, TRANSPORT_H,
+      TRANSPORT_TO_PILL, PILL_H, BELOW_COVER_H,
+    };
+  };
+
+  // The compression ladder: normal rhythm with the cover shrunk to fit
+  // (floor MIN_ADAPTIVE_COVER) → compact rhythm with the cover shrunk further
+  // (floor MIN_COMPACT_COVER) → compact rhythm at the floor + scrolling.
+  // Before the ladder, screens that failed the first rung jumped straight to
+  // "natural cover + scroll" — which parked the transport under the chapters
+  // peek with nothing hinting that scrolling was even possible.
+  const normal = modeMetrics(false);
+  const fittedNormal = Math.floor(availH - normal.BELOW_COVER_H);
+  const compact = fittedNormal < MIN_ADAPTIVE_COVER;
+  const m = compact ? modeMetrics(true) : normal;
+  const fitted = compact ? Math.floor(availH - m.BELOW_COVER_H) : fittedNormal;
+  const COVER_SIZE_EXP = Math.min(
+    naturalCover,
+    Math.max(fitted, compact ? MIN_COMPACT_COVER : MIN_ADAPTIVE_COVER)
+  );
+
+  const {
+    COVER_TO_BARS, BOOK_ROW_H, BARS_GAP, BOOK_BAR_BOX, SCRUBBER_H,
+    SCRUBBER_TO_TITLE, TITLE_H, TITLE_TO_TRANSPORT, TRANSPORT_H,
+    TRANSPORT_TO_PILL, PILL_H, BELOW_COVER_H,
+  } = m;
+  const BOOK_BAR_H = 12; // the book wave's own height inside the row
+  const SCRUBBER_TOP_GAP = showBookProgress ? BARS_GAP : COVER_TO_BARS;
+
+  // Transport button geometry, centered on the play button. On any column
+  // ≥ 392dp this reproduces the original hardcoded design positions exactly
+  // (play at PX+(PW-88)/2, jumps ±72/+104, skips ±144/+176).
+  const SIDE_BTN = m.t.side;
+  const PLAY_BTN = m.t.play;
+  const T_GAP = m.t.gap;
+  const SIDE_TOP = Math.round((PLAY_BTN - SIDE_BTN) / 2);
+  const PLAY_X = PX + (PW - PLAY_BTN) / 2;
+  const JUMP_BACK_X = PLAY_X - T_GAP - SIDE_BTN;
+  const SKIP_PREV_X = JUMP_BACK_X - T_GAP - SIDE_BTN;
+  const JUMP_FWD_X = PLAY_X + PLAY_BTN + T_GAP;
+  const SKIP_NEXT_X = JUMP_FWD_X + SIDE_BTN + T_GAP;
+
   // Height of the cover→pill block, used to vertically center it on tablets.
   // Derived from the same deltas as the cascade so it stays book-bar-aware.
   const CONTENT_BLOCK_H = COVER_SIZE_EXP + BELOW_COVER_H;
@@ -235,25 +351,39 @@ export function computePlayerLayout({
 
   // The full-player content uses a fixed absolute cascade inside a ScrollView
   // whose scrolling is normally OFF (so the drag-to-collapse gesture runs
-  // cleanly). On short viewports (small phones) the cascade can run past the
-  // bottom of the VISIBLE area — which ends at the chapters sheet's peek, not
-  // the screen edge — and clip the bottom pill, which would then be
-  // unreachable. This estimate is geometry-only — fontScale is NOT an input
-  // (rows cap their text at maxFontSizeMultiplier 1.3, and the component keeps
-  // a measured-overflow fallback for anything the estimate can't see). Compare
-  // the in-flow block bottom against the visible viewport and re-enable
-  // scrolling ONLY when it can't fit, so nothing is ever cut off; the top drag
-  // region still collapses the sheet.
+  // cleanly). After the compression ladder, screens can remain where the
+  // cascade runs past the bottom of the VISIBLE area — which ends at the
+  // chapters sheet's peek, not the screen edge — and clip the bottom pill,
+  // which would then be unreachable. This estimate is geometry-only —
+  // fontScale is NOT an input (rows cap their text at maxFontSizeMultiplier
+  // 1.3, and the component keeps a measured-overflow fallback for anything
+  // the estimate can't see). Compare the in-flow block bottom against the
+  // visible viewport and re-enable scrolling ONLY when it can't fit, so
+  // nothing is ever cut off; the top drag region still collapses the sheet.
   const contentBottomY = TRANSPORT_Y_EXP + TRANSPORT_H + TRANSPORT_TO_PILL + PILL_H;
   const contentOverflows = contentBottomY + 8 > screenHeight - insetBottom - PEEK_HANDLE_H;
 
   return {
     isTablet,
     LS_COVER,
+    LS_PANE_W,
+    LS_SIDE_BTN,
+    LS_PLAY_BTN,
+    LS_T_GAP,
     PW,
     PX,
     COVER_SIZE_EXP,
     TOP_BAR_Y,
+    compact,
+    SIDE_BTN,
+    PLAY_BTN,
+    T_GAP,
+    SIDE_TOP,
+    SKIP_PREV_X,
+    JUMP_BACK_X,
+    PLAY_X,
+    JUMP_FWD_X,
+    SKIP_NEXT_X,
     TOPBAR_TO_SOURCE,
     SOURCE_LABEL_H,
     SOURCE_TO_COVER,
