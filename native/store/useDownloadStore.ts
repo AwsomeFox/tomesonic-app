@@ -301,6 +301,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     // Native progress callbacks are numbers in practice, but a NaN here
     // poisons the progress math and gets persisted — guard the inputs.
     if (!Number.isFinite(bytesDownloaded)) return;
+
     const updatedParts = (item.parts || []).map(p =>
       p.id === partId
         ? {
@@ -331,12 +332,32 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     };
 
     // Throttle persistence — progress ticks arrive many times per second and
-    // each save is a full-item MMKV write. In-memory state is always current;
-    // part completion / status changes save unconditionally elsewhere.
+    // each save is a full-item MMKV write. Part completion / status changes
+    // save unconditionally elsewhere. (Kept on its own time window, ahead of
+    // the store-write gate below, so crash-safety cadence is granularity-
+    // independent.)
     const now = Date.now();
     if (now - (_lastDbSaveAt[id] || 0) >= DB_SAVE_INTERVAL_MS) {
       _lastDbSaveAt[id] = now;
       db.saveDownloadItem(updatedItem);
+    }
+    // Gate the STORE write on something a subscriber can actually SEE change:
+    // the integer percent (what every ring/bar/label renders) or the
+    // pending→downloading status flip. Unthrottled, the native callbacks
+    // (many per second) replaced the activeDownloads map reference on every
+    // tick, re-rendering every subscriber — each mounted BookCard, the item
+    // screens, the downloads screen — which janked scrolling for the whole
+    // life of any download. Skipping a tick loses nothing stateful: part and
+    // status milestones write unconditionally via their own actions, and the
+    // next percent boundary carries current bytes. Deliberately stateless
+    // (compares against the stored item) — a wall-clock throttle here would
+    // starve back-to-back updates of last-write-wins and leak state between
+    // downloads of the same id.
+    if (
+      Math.round(updatedItem.progress * 100) === Math.round((item.progress || 0) * 100) &&
+      item.status === "downloading"
+    ) {
+      return;
     }
     set(state => ({
       activeDownloads: {

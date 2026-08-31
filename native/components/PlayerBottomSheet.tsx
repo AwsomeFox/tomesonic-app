@@ -165,6 +165,298 @@ function BarTimeLabel({
   );
 }
 
+// ————— Live-position leaves —————
+// The ~1s playback tick writes `position` to the store. The player component
+// itself must NOT subscribe to it: with four mounted subtrees (portrait +
+// landscape × mini + full) a top-level subscription re-rendered the whole
+// sheet — over every screen — once a second for the entire life of a playing
+// session, hitching any scroll or animation that shared the JS thread with it.
+// Everything that RENDERS the live position lives in the leaves below, which
+// subscribe on their own; a tick re-renders a few small rows instead.
+
+/** Live chapter-relative fraction (whole-book fraction when chapterless /
+ *  outside chapters) — the value both mini waves and the scrubber rest on. */
+function liveChapterFracOf(s: {
+  position: number;
+  duration: number;
+  chapters: any[];
+  currentChapterIndex: number;
+}): number {
+  const bookFrac = s.duration > 0 ? Math.min(s.position / s.duration, 1) : 0;
+  const ch =
+    s.chapters && s.currentChapterIndex >= 0 && s.currentChapterIndex < s.chapters.length
+      ? s.chapters[s.currentChapterIndex]
+      : null;
+  if (!ch) return bookFrac;
+  const start = ch.start || 0;
+  const span = Math.max(0, (ch.end || s.duration) - start);
+  return span > 0 ? Math.min(Math.max((s.position - start) / span, 0), 1) : bookFrac;
+}
+
+/** The mini-player progress wave (both orientations use the same config). */
+function MiniChapterWave({ colors }: { colors: ReturnType<typeof useThemeColors> }) {
+  const frac = usePlaybackStore(liveChapterFracOf);
+  const isPlaying = usePlaybackStore((s) => s.isPlaying);
+  return (
+    <WavyProgress
+      progress={frac}
+      playing={isPlaying}
+      color={colors.primary}
+      trackColor={withAlpha(colors.primary, 0.2)}
+      height={10}
+      strokeWidth={2.5}
+      flattenWhenPaused
+    />
+  );
+}
+
+/**
+ * The two progress rows of the expanded player — book bar and interactive
+ * chapter scrubber — self-contained: live position, drag preview state, and
+ * the scrub PanResponder all live HERE, so both a playback tick and every
+ * frame of a scrub drag re-render only this block. Each orientation mounts
+ * its own instance; per-instance width/drag state replaces the old shared
+ * refs (and their rotation guard) — a hidden instance measures its own bar,
+ * and a rotation mid-drag terminates the gesture anyway.
+ */
+function PlayerBarsBlock({
+  landscape,
+  colors,
+  showBook,
+  showChapter,
+  bookRowMarginTop,
+  bookRowHeight,
+  bookBarHeight,
+  bookBarStrokeWidth,
+  scrubberMarginTop,
+  scrubberHeight,
+}: {
+  landscape: boolean;
+  colors: ReturnType<typeof useThemeColors>;
+  showBook: boolean;
+  showChapter: boolean;
+  bookRowMarginTop: number;
+  /** Portrait fixes the row heights to the layout cascade's boxes; landscape
+   *  rows auto-size (undefined). */
+  bookRowHeight?: number;
+  bookBarHeight: number;
+  bookBarStrokeWidth: number;
+  scrubberMarginTop: number;
+  scrubberHeight?: number;
+}) {
+  const position = usePlaybackStore((s) => s.position);
+  const duration = usePlaybackStore((s) => s.duration);
+  const isPlaying = usePlaybackStore((s) => s.isPlaying);
+  const chapters = usePlaybackStore((s) => s.chapters);
+  const currentChapterIndex = usePlaybackStore((s) => s.currentChapterIndex);
+  const seek = usePlaybackStore((s) => s.seek);
+  const seekForward = usePlaybackStore((s) => s.seekForward);
+  const seekBackward = usePlaybackStore((s) => s.seekBackward);
+  const jumpFwdSecs = useUserStore((s) => s.settings?.jumpForwardTime) ?? 10;
+  const jumpBackSecs = useUserStore((s) => s.settings?.jumpBackwardTime) ?? 10;
+
+  // Chapter scrubber drag state.
+  const [dragFrac, setDragFrac] = useState<number | null>(null);
+  const barWidthRef = useRef(0);
+  const boundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
+  // Chapter bounds captured at the MOMENT the drag begins. boundsRef is
+  // rewritten every render from the LIVE current chapter, so a ~1s position
+  // tick that crosses a chapter boundary mid-drag would otherwise move the
+  // seek target out from under the user (or, at a chapter gap / book end,
+  // collapse to whole-book bounds). Snapshot on grant, seek against the
+  // snapshot on release.
+  const dragStartBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
+
+  const scrubPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        const w = barWidthRef.current;
+        if (!w) return;
+        // Freeze the chapter the user is dragging within — the release seek maps
+        // against THESE bounds, immune to live ticks during the gesture.
+        dragStartBoundsRef.current = { ...boundsRef.current };
+        haptic();
+        setDragFrac(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
+      },
+      onPanResponderMove: (e) => {
+        const w = barWidthRef.current;
+        if (!w) return;
+        setDragFrac(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
+      },
+      onPanResponderRelease: (e) => {
+        const w = barWidthRef.current;
+        if (w) {
+          const frac = Math.max(0, Math.min(1, e.nativeEvent.locationX / w));
+          // Read duration from the ref, not the closure: PanResponder.create
+          // runs once, so a closed-over `duration` captured the FIRST render's
+          // value (0 — mounted before any session), making this fallback dead
+          // and silently discarding drags on a zero-span (malformed) chapter.
+          // Use the drag-START snapshot (not the live ref) so a chapter change
+          // mid-gesture can't retarget the seek to the wrong chapter/whole book.
+          const { start, span, duration: dur } = dragStartBoundsRef.current;
+          if (span > 0) seek(start + frac * span);
+          else if (dur > 0) seek(frac * dur);
+        }
+        setDragFrac(null);
+      },
+      onPanResponderTerminate: () => setDragFrac(null),
+      // Never yield an in-flight scrub to the sheet pan — in landscape the
+      // sheet's "top region" drag zone can overlap the controls pane, and the
+      // default (yield) would drop the drag mid-scrub without seeking.
+      onPanResponderTerminationRequest: () => false,
+    })
+  ).current;
+
+  const bookFrac = duration > 0 ? Math.min(position / duration, 1) : 0;
+  const bookRemaining = Math.max(0, duration - position);
+
+  const currentChapter =
+    chapters && chapters.length > 0 && currentChapterIndex >= 0 && currentChapterIndex < chapters.length
+      ? chapters[currentChapterIndex]
+      : null;
+  const chapterStart = currentChapter ? currentChapter.start || 0 : 0;
+  const chapterEnd = currentChapter ? currentChapter.end || duration : duration;
+  const chapterSpan = Math.max(0, chapterEnd - chapterStart);
+  boundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan, duration };
+
+  const liveChapterFrac =
+    chapterSpan > 0 ? Math.min(Math.max((position - chapterStart) / chapterSpan, 0), 1) : bookFrac;
+  const chapterFrac = dragFrac != null ? dragFrac : liveChapterFrac;
+
+  // Derive from chapterFrac so the numbers FOLLOW a drag on chapterless books
+  // too (chapterSpan is already the whole-book duration there) — they used to
+  // stay pinned to the live position while the wave previewed the drag.
+  const chapterElapsed = chapterSpan > 0 ? chapterFrac * chapterSpan : position;
+  const chapterRemaining = chapterSpan > 0 ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
+
+  // Screen-reader support for the chapter scrubber: a pan-only surface is
+  // invisible to TalkBack, so expose it as an adjustable with ±30s steps.
+  const scrubA11yProps = {
+    accessible: true,
+    accessibilityRole: "adjustable" as const,
+    accessibilityLabel: currentChapter ? "Chapter position" : "Book position",
+    accessibilityValue: {
+      text: `${secondsToTimestamp(chapterElapsed)} elapsed, ${secondsToTimestamp(chapterRemaining)} remaining`,
+    },
+    accessibilityActions: [
+      { name: "increment", label: `Forward ${jumpFwdSecs} seconds` },
+      { name: "decrement", label: `Back ${jumpBackSecs} seconds` },
+    ],
+    onAccessibilityAction: (e: { nativeEvent: { actionName: string } }) => {
+      if (e.nativeEvent.actionName === "increment") seekForward(jumpFwdSecs);
+      else if (e.nativeEvent.actionName === "decrement") seekBackward(jumpBackSecs);
+    },
+  };
+
+  const bookRow = showBook ? (
+    <View
+      testID={landscape ? undefined : "player-book-bar"}
+      style={{
+        marginTop: bookRowMarginTop,
+        height: bookRowHeight,
+        flexDirection: "row",
+        alignItems: "center",
+        columnGap: 8,
+      }}
+      // One spoken sentence for the whole row — the raw label text
+      // ("3:59:53") reads ambiguously digit-by-digit on TalkBack.
+      accessible
+      accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
+    >
+      <BarTimeLabel colors={colors}>{secondsToTimestamp(position)}</BarTimeLabel>
+      <View style={{ flex: 1, justifyContent: "center" }}>
+        <WavyProgress
+          progress={bookFrac}
+          playing={isPlaying}
+          color={colors.primary}
+          trackColor={withAlpha(colors.primary, 0.35)}
+          height={bookBarHeight}
+          strokeWidth={bookBarStrokeWidth}
+          amplitude={2}
+          wavelength={48}
+          flattenWhenPaused
+        />
+      </View>
+      <BarTimeLabel colors={colors}>-{secondsToTimestamp(bookRemaining)}</BarTimeLabel>
+    </View>
+  ) : null;
+
+  const scrubberContent = (
+    <>
+      {/* Hidden from a11y: redundant with the scrubber's accessibilityValue
+          (spoken, unambiguous form). */}
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <BarTimeLabel colors={colors}>{secondsToTimestamp(chapterElapsed)}</BarTimeLabel>
+      </View>
+      <View
+        {...scrubPanResponder.panHandlers}
+        {...scrubA11yProps}
+        onLayout={(e: LayoutChangeEvent) => {
+          barWidthRef.current = e.nativeEvent.layout.width;
+        }}
+        style={{ flex: 1, height: 32, justifyContent: "center" }}
+        hitSlop={{ top: 8, bottom: 8 }}
+      >
+        <WavyProgress
+          progress={chapterFrac}
+          playing={isPlaying}
+          color={colors.primary}
+          trackColor={withAlpha(colors.primary, 0.22)}
+          height={22}
+          strokeWidth={4}
+          amplitude={3.5}
+          wavelength={44}
+          showStopDot={false}
+          showHandle
+          handleActive={dragFrac != null}
+          flattenWhenPaused
+        />
+      </View>
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <BarTimeLabel colors={colors}>-{secondsToTimestamp(chapterRemaining)}</BarTimeLabel>
+      </View>
+    </>
+  );
+
+  const scrubberRowStyle = {
+    marginTop: scrubberMarginTop,
+    height: scrubberHeight,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    columnGap: 8,
+  };
+
+  return (
+    <>
+      {bookRow}
+      {landscape ? (
+        // Landscape mounts the row only when shown (the pane stacks flexibly).
+        showChapter ? <View style={scrubberRowStyle}>{scrubberContent}</View> : null
+      ) : (
+        // Portrait ALWAYS reserves the row box — the absolute Y-cascade
+        // budgets SCRUBBER_H whether or not the wave is shown.
+        <View testID="player-chapter-scrubber" style={scrubberRowStyle}>
+          {showChapter ? scrubberContent : null}
+        </View>
+      )}
+    </>
+  );
+}
+
+/**
+ * Feeds BookmarksModal the live position WITHOUT the player subscribing to it:
+ * closed → constant 0 (no re-renders); open → ticks re-render just the modal,
+ * keeping the "Add bookmark at …" label and the active-row highlight live.
+ */
+function LiveBookmarksModal(
+  props: Omit<React.ComponentProps<typeof BookmarksModal>, "currentTime">
+) {
+  const position = usePlaybackStore((s) => (props.visible ? s.position : 0));
+  return <BookmarksModal {...props} currentTime={position} />;
+}
+
 // Consolidated bottom pill: [speed][Sleep][Bookmark]. Hoisted (like
 // CircleButton) so it keeps a stable component identity across the ~1s
 // position re-renders, and shared verbatim between the portrait cascade and
@@ -310,16 +602,19 @@ export default function PlayerBottomSheet() {
   // selector-less usePlaybackStore() re-rendered the whole player on EVERY store
   // write — including ones it doesn't use (isCasting, castClient, chapterQueue,
   // onTabScreen, isInitialized). With per-slice selectors it re-renders only when
-  // one of these values changes. (position/duration still tick ~1s while playing,
-  // which the scrubber needs — isolating those into a child is a further optimization.)
+  // one of these values changes; the ~1s position tick is isolated further, into
+  // the live-position leaves above.
   const currentSession = usePlaybackStore((s) => s.currentSession);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
   // Native stall indicator — a spinner overlays the play/pause control so a
   // mid-stream buffer doesn't read as a frozen player under the pause glyph.
   const isBuffering = usePlaybackStore((s) => s.isBuffering);
   const playPause = usePlaybackStore((s) => s.playPause);
-  const position = usePlaybackStore((s) => s.position);
-  const duration = usePlaybackStore((s) => s.duration);
+  // position/duration are deliberately NOT subscribed here — see the
+  // live-position leaves (PlayerBarsBlock / MiniChapterWave /
+  // LiveBookmarksModal) above: a top-level subscription re-rendered all four
+  // player subtrees on every ~1s playback tick. One-shot readers (sleep
+  // timer, celebration watcher) go through usePlaybackStore.getState().
   const playbackSpeed = usePlaybackStore((s) => s.playbackSpeed);
   const setPlaybackSpeed = usePlaybackStore((s) => s.setPlaybackSpeed);
   const seekForward = usePlaybackStore((s) => s.seekForward);
@@ -360,7 +655,13 @@ export default function PlayerBottomSheet() {
   // Subscribed (not getState) so the LOCAL/STREAMING label reacts to a
   // download completing/being deleted while the sheet is open and PAUSED —
   // while playing, the 1s position tick masked the missing subscription.
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
+  // Per-book boolean (not the map): the map reference changes on download
+  // progress writes too, and this component must not re-render for those.
+  const isBookDownloaded = useDownloadStore((s) => {
+    const bid =
+      currentSession?.libraryItemId || currentSession?.libraryItem?.id || currentSession?.id;
+    return !!(bid && s.completedDownloads[bid]);
+  });
 
   // Local "Want to Read" / favorites overlay (ABS has no server flag). Subscribe
   // reactively so the full-player heart reflects/persists the toggle in sync
@@ -475,30 +776,46 @@ export default function PlayerBottomSheet() {
   // Celebrate when a book reaches its end — fires once per session, and only
   // on CROSSING the finish line. Without the crossing check, restoring a
   // session that was saved at the end (reopening an already-finished book)
-  // fired confetti on app launch.
+  // fired confetti on app launch. A TRANSIENT store subscription (not a
+  // position selector): the watcher must sample every tick, but only the rare
+  // actual crossing may re-render this component.
   const [showConfetti, setShowConfetti] = useState(false);
   const celebratedRef = useRef<string | null>(null);
   const prevPosRef = useRef<{ id: string; pos: number } | null>(null);
   useEffect(() => {
-    const sessionId = currentSession?.id;
-    if (!sessionId || !duration || duration <= 0) return;
-    const prev = prevPosRef.current;
-    prevPosRef.current = { id: sessionId, pos: position };
-    // First observation of this session (resume point) never celebrates,
-    // nor does a position already past the line.
-    if (!prev || prev.id !== sessionId || prev.pos >= duration - 2) return;
-    // Only a NATURAL playback advance celebrates. Scrubbing/seeking/skipping to
-    // the end lands as one big position jump — dragging the scrubber to the
-    // finish shouldn't fire confetti you didn't earn. A foreground playback tick
-    // advances at most a few seconds (speed x interval), so a small forward
-    // delta is the "listened to the end" signal.
-    const delta = position - prev.pos;
-    const naturalCrossing = delta > 0 && delta <= 15;
-    if (position >= duration - 2 && naturalCrossing && celebratedRef.current !== sessionId) {
-      celebratedRef.current = sessionId;
-      setShowConfetti(true);
+    // Seed the baseline from the CURRENT state — the mount-time position is
+    // the resume point ("first observation"), exactly as when this logic ran
+    // as a render effect. Without it, the first tick after mount would read
+    // as the first observation instead, and a resume 1s before the finish
+    // line could slip through uncelebrated (or a restored-at-end session
+    // could celebrate).
+    const st0 = usePlaybackStore.getState();
+    if (st0.currentSession?.id) {
+      prevPosRef.current = { id: st0.currentSession.id, pos: st0.position };
     }
-  }, [position, duration, currentSession?.id]);
+    return usePlaybackStore.subscribe((s) => {
+      const sessionId = s.currentSession?.id;
+      const { position, duration } = s;
+      if (!sessionId || !duration || duration <= 0) return;
+      const prev = prevPosRef.current;
+      if (prev && prev.id === sessionId && prev.pos === position) return; // non-position write
+      prevPosRef.current = { id: sessionId, pos: position };
+      // First observation of this session (resume point) never celebrates,
+      // nor does a position already past the line.
+      if (!prev || prev.id !== sessionId || prev.pos >= duration - 2) return;
+      // Only a NATURAL playback advance celebrates. Scrubbing/seeking/skipping to
+      // the end lands as one big position jump — dragging the scrubber to the
+      // finish shouldn't fire confetti you didn't earn. A foreground playback tick
+      // advances at most a few seconds (speed x interval), so a small forward
+      // delta is the "listened to the end" signal.
+      const delta = position - prev.pos;
+      const naturalCrossing = delta > 0 && delta <= 15;
+      if (position >= duration - 2 && naturalCrossing && celebratedRef.current !== sessionId) {
+        celebratedRef.current = sessionId;
+        setShowConfetti(true);
+      }
+    });
+  }, []);
 
   const onTabScreen = usePlaybackStore((s) => s.onTabScreen);
 
@@ -670,61 +987,8 @@ export default function PlayerBottomSheet() {
     })
   ).current;
 
-  // Chapter scrubber drag state.
-  const [chapterBarWidth, setChapterBarWidth] = useState(0);
-  const [dragFrac, setDragFrac] = useState<number | null>(null);
-  const chapterBarWidthRef = useRef(0);
-  const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
-  // Chapter bounds captured at the MOMENT the drag begins. chapterBoundsRef is
-  // rewritten every render from the LIVE current chapter, so a ~1s position
-  // tick that crosses a chapter boundary mid-drag would otherwise move the
-  // seek target out from under the user (or, at a chapter gap / book end,
-  // collapse to whole-book bounds). Snapshot on grant, seek against the
-  // snapshot on release.
-  const dragStartBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
-
-  // Draggable chapter scrubber PanResponder
-  const chapterScrubPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
-        const w = chapterBarWidthRef.current;
-        if (!w) return;
-        // Freeze the chapter the user is dragging within — the release seek maps
-        // against THESE bounds, immune to live ticks during the gesture.
-        dragStartBoundsRef.current = { ...chapterBoundsRef.current };
-        haptic();
-        setDragFrac(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
-      },
-      onPanResponderMove: (e) => {
-        const w = chapterBarWidthRef.current;
-        if (!w) return;
-        setDragFrac(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
-      },
-      onPanResponderRelease: (e) => {
-        const w = chapterBarWidthRef.current;
-        if (w) {
-          const frac = Math.max(0, Math.min(1, e.nativeEvent.locationX / w));
-          // Read duration from the ref, not the closure: PanResponder.create
-          // runs once, so a closed-over `duration` captured the FIRST render's
-          // value (0 — mounted before any session), making this fallback dead
-          // and silently discarding drags on a zero-span (malformed) chapter.
-          // Use the drag-START snapshot (not the live ref) so a chapter change
-          // mid-gesture can't retarget the seek to the wrong chapter/whole book.
-          const { start, span, duration: dur } = dragStartBoundsRef.current;
-          if (span > 0) seek(start + frac * span);
-          else if (dur > 0) seek(frac * dur);
-        }
-        setDragFrac(null);
-      },
-      onPanResponderTerminate: () => setDragFrac(null),
-      // Never yield an in-flight scrub to the sheet pan — in landscape the
-      // sheet's "top region" drag zone can overlap the controls pane, and the
-      // default (yield) would drop the drag mid-scrub without seeking.
-      onPanResponderTerminationRequest: () => false,
-    })
-  ).current;
+  // The chapter scrubber's drag state and PanResponder live inside
+  // PlayerBarsBlock (one per orientation) — see the live-position leaves.
 
   // --- Reanimated Style Interpolations ---
 
@@ -968,11 +1232,7 @@ export default function PlayerBottomSheet() {
   const mediaTitle = currentSession.displayTitle || "Unknown Audiobook";
   const authorName = currentSession.displayAuthor || "Unknown Author";
   const coverUrl = currentSession.coverUrl || "";
-  const bookId =
-    currentSession?.libraryItemId ||
-    currentSession?.libraryItem?.id ||
-    currentSession?.id;
-  const isDownloaded = !!(bookId && completedDownloads[bookId]);
+  const isDownloaded = isBookDownloaded;
 
   const isLocal = !!(
     isDownloaded ||
@@ -997,57 +1257,9 @@ export default function PlayerBottomSheet() {
     ? [mediaTitle, authorName].filter(Boolean).join(" • ")
     : authorName;
 
-  const bookFrac = duration > 0 ? Math.min(position / duration, 1) : 0;
-  const bookRemaining = Math.max(0, duration - position);
-
-  const chapterStart = currentChapter ? currentChapter.start || 0 : 0;
-  const chapterEnd = currentChapter ? currentChapter.end || duration : duration;
-  const chapterSpan = Math.max(0, chapterEnd - chapterStart);
-  chapterBoundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan, duration };
-
-  const liveChapterFrac =
-    chapterSpan > 0 ? Math.min(Math.max((position - chapterStart) / chapterSpan, 0), 1) : bookFrac;
-  const chapterFrac = dragFrac != null ? dragFrac : liveChapterFrac;
-
-  // Derive from chapterFrac so the numbers FOLLOW a drag on chapterless books
-  // too (chapterSpan is already the whole-book duration there) — they used to
-  // stay pinned to the live position while the wave previewed the drag.
-  const chapterElapsed = chapterSpan > 0 ? chapterFrac * chapterSpan : position;
-  const chapterRemaining = chapterSpan > 0 ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
-
   // Clean speed label — a server-restored playbackRate can carry float noise
   // (e.g. 1.2999999), which "+toFixed(2)" collapses to 1.3 / 3 / 1.75.
   const speedLabel = `${+playbackSpeed.toFixed(2)}×`;
-
-  // Screen-reader support for the chapter scrubber: a pan-only surface is
-  // invisible to TalkBack, so expose it as an adjustable with ±30s steps.
-  // Shared by the portrait and landscape scrub containers.
-  const scrubA11yProps = {
-    accessible: true,
-    accessibilityRole: "adjustable" as const,
-    accessibilityLabel: currentChapter ? "Chapter position" : "Book position",
-    accessibilityValue: {
-      text: `${secondsToTimestamp(chapterElapsed)} elapsed, ${secondsToTimestamp(chapterRemaining)} remaining`,
-    },
-    accessibilityActions: [
-      { name: "increment", label: `Forward ${jumpFwdSecs} seconds` },
-      { name: "decrement", label: `Back ${jumpBackSecs} seconds` },
-    ],
-    onAccessibilityAction: (e: { nativeEvent: { actionName: string } }) => {
-      if (e.nativeEvent.actionName === "increment") seekForward(jumpFwdSecs);
-      else if (e.nativeEvent.actionName === "decrement") seekBackward(jumpBackSecs);
-    },
-  };
-
-  // Both orientation subtrees stay mounted (display-toggled), and BOTH
-  // scrubbers call onLayout — only the visible one may own the width ref, or
-  // the hidden subtree's stale width breaks seek accuracy after rotation.
-  const onChapterBarLayoutFor = (forLandscape: boolean) => (e: LayoutChangeEvent) => {
-    if (forLandscape !== isLandscape) return;
-    const w = e.nativeEvent.layout.width;
-    setChapterBarWidth(w);
-    chapterBarWidthRef.current = w;
-  };
 
   return (
     <View
@@ -1277,90 +1489,23 @@ export default function PlayerBottomSheet() {
               {/* Book progress row: elapsed | wave | -remaining. The classic
                   flanking layout — each bar carries its own time labels
                   inline, replacing the old combined numeric info row. */}
-              {showPlayerBookProgress !== false ? (
-                <View
-                  testID="player-book-bar"
-                  style={{
-                    marginTop: COVER_TO_BARS,
-                    height: BOOK_ROW_H,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    columnGap: 8,
-                  }}
-                  // One spoken sentence for the whole row — the raw label text
-                  // ("3:59:53") reads ambiguously digit-by-digit on TalkBack.
-                  accessible
-                  accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
-                >
-                  <BarTimeLabel colors={colors}>{secondsToTimestamp(position)}</BarTimeLabel>
-                  <View style={{ flex: 1, justifyContent: "center" }}>
-                    <WavyProgress
-                      progress={bookFrac}
-                      playing={isPlaying}
-                      color={colors.primary}
-                      trackColor={withAlpha(colors.primary, 0.35)}
-                      height={BOOK_BAR_H}
-                      strokeWidth={2.5}
-                      amplitude={2}
-                      wavelength={48}
-                      flattenWhenPaused
-                    />
-                  </View>
-                  <BarTimeLabel colors={colors}>-{secondsToTimestamp(bookRemaining)}</BarTimeLabel>
-                </View>
-              ) : null}
-
-              {/* Interactive Chapter Scrubber row: elapsed | wave | -remaining.
-                  SCRUBBER_TOP_GAP already encodes both book-bar modes (BARS_GAP
-                  under the book row, COVER_TO_BARS directly under the cover),
-                  so one delta serves as the marginTop either way. The left
-                  label derives from chapterElapsed (→ chapterFrac → dragFrac),
-                  so it live-updates while the scrubber is dragged. */}
-              <View
-                testID="player-chapter-scrubber"
-                style={{
-                  marginTop: SCRUBBER_TOP_GAP,
-                  height: SCRUBBER_H,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  columnGap: 8,
-                }}
-              >
-                {showPlayerChapterProgress !== false ? (
-                  <>
-                    {/* Hidden from a11y: redundant with the scrubber's
-                        accessibilityValue (spoken, unambiguous form). */}
-                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                      <BarTimeLabel colors={colors}>{secondsToTimestamp(chapterElapsed)}</BarTimeLabel>
-                    </View>
-                    <View
-                      {...chapterScrubPanResponder.panHandlers}
-                      {...scrubA11yProps}
-                      onLayout={onChapterBarLayoutFor(false)}
-                      style={{ flex: 1, height: 32, justifyContent: "center" }}
-                      hitSlop={{ top: 8, bottom: 8 }}
-                    >
-                      <WavyProgress
-                        progress={chapterFrac}
-                        playing={isPlaying}
-                        color={colors.primary}
-                        trackColor={withAlpha(colors.primary, 0.22)}
-                        height={22}
-                        strokeWidth={4}
-                        amplitude={3.5}
-                        wavelength={44}
-                        showStopDot={false}
-                        showHandle
-                        handleActive={dragFrac != null}
-                        flattenWhenPaused
-                      />
-                    </View>
-                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                      <BarTimeLabel colors={colors}>-{secondsToTimestamp(chapterRemaining)}</BarTimeLabel>
-                    </View>
-                  </>
-                ) : null}
-              </View>
+              {/* Book bar + interactive chapter scrubber (self-contained
+                  live-position leaf — see PlayerBarsBlock). SCRUBBER_TOP_GAP
+                  already encodes both book-bar modes (BARS_GAP under the book
+                  row, COVER_TO_BARS directly under the cover), so one delta
+                  serves as the marginTop either way. */}
+              <PlayerBarsBlock
+                landscape={false}
+                colors={colors}
+                showBook={showPlayerBookProgress !== false}
+                showChapter={showPlayerChapterProgress !== false}
+                bookRowMarginTop={COVER_TO_BARS}
+                bookRowHeight={BOOK_ROW_H}
+                bookBarHeight={BOOK_BAR_H}
+                bookBarStrokeWidth={2.5}
+                scrubberMarginTop={SCRUBBER_TOP_GAP}
+                scrubberHeight={SCRUBBER_H}
+              />
 
               {/* Title & Author Placeholder (absolute overlay handles actual rendering) */}
               <View style={{ height: TITLE_H, marginTop: SCRUBBER_TO_TITLE }} />
@@ -1719,15 +1864,7 @@ export default function PlayerBottomSheet() {
             animatedMiniProgressStyle,
           ]}
         >
-          <WavyProgress
-            progress={liveChapterFrac}
-            playing={isPlaying}
-            color={colors.primary}
-            trackColor={withAlpha(colors.primary, 0.2)}
-            height={10}
-            strokeWidth={2.5}
-            flattenWhenPaused
-          />
+          <MiniChapterWave colors={colors} />
         </Animated.View>
         </View>
 
@@ -1772,15 +1909,7 @@ export default function PlayerBottomSheet() {
                 to the text zone: cover ends x=62, the transport cluster starts
                 ~176 from the right edge (44+10+56+10+44 + 12 padding). */}
             <View pointerEvents="none" style={{ position: "absolute", left: 74, right: 184, top: MINIPLAYER_HEIGHT - 10 }}>
-              <WavyProgress
-                progress={liveChapterFrac}
-                playing={isPlaying}
-                color={colors.primary}
-                trackColor={withAlpha(colors.primary, 0.2)}
-                height={10}
-                strokeWidth={2.5}
-                flattenWhenPaused
-              />
+              <MiniChapterWave colors={colors} />
             </View>
           </Animated.View>
 
@@ -1842,40 +1971,18 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
-                {/* Book progress row: elapsed | wave | -remaining (same
-                    flanking layout as portrait). */}
-                {showPlayerBookProgress !== false ? (
-                  <View
-                    style={{ marginTop: 12, flexDirection: "row", alignItems: "center", columnGap: 8 }}
-                    // Grouped like the portrait book row — see the comment there.
-                    accessible
-                    accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
-                  >
-                    <BarTimeLabel colors={colors}>{secondsToTimestamp(position)}</BarTimeLabel>
-                    <View style={{ flex: 1, justifyContent: "center" }}>
-                      <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
-                    </View>
-                    <BarTimeLabel colors={colors}>-{secondsToTimestamp(bookRemaining)}</BarTimeLabel>
-                  </View>
-                ) : null}
-
-                {/* Chapter scrubber row: elapsed | wave | -remaining. Left
-                    label derives from chapterElapsed (→ dragFrac) so it
-                    live-updates during a drag, exactly like portrait. */}
-                {showPlayerChapterProgress !== false ? (
-                  <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", columnGap: 8 }}>
-                    {/* Hidden: redundant with the scrubber's accessibilityValue. */}
-                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                      <BarTimeLabel colors={colors}>{secondsToTimestamp(chapterElapsed)}</BarTimeLabel>
-                    </View>
-                    <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ flex: 1, height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
-                      <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
-                    </View>
-                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                      <BarTimeLabel colors={colors}>-{secondsToTimestamp(chapterRemaining)}</BarTimeLabel>
-                    </View>
-                  </View>
-                ) : null}
+                {/* Book bar + chapter scrubber — the same live-position leaf
+                    as portrait (its own instance, its own drag state). */}
+                <PlayerBarsBlock
+                  landscape
+                  colors={colors}
+                  showBook={showPlayerBookProgress !== false}
+                  showChapter={showPlayerChapterProgress !== false}
+                  bookRowMarginTop={12}
+                  bookBarHeight={12}
+                  bookBarStrokeWidth={3}
+                  scrubberMarginTop={6}
+                />
 
                 {/* Sized by playerLayout into the pane width (LS_PANE_W) — the
                     fixed 360dp design span overflowed narrow display-scaled
@@ -1950,8 +2057,10 @@ export default function PlayerBottomSheet() {
         hasChapter={!!currentChapter}
         onSet={(seconds, endOfChapter) => {
           if (endOfChapter) {
+            // One-shot read — the press moment's position, no subscription.
+            const pos = usePlaybackStore.getState().position;
             const remaining = currentChapter
-              ? Math.max(0, Math.round((currentChapter.end || 0) - position))
+              ? Math.max(0, Math.round((currentChapter.end || 0) - pos))
               : 0;
             setSleepTimer(remaining, true);
           } else {
@@ -1965,11 +2074,10 @@ export default function PlayerBottomSheet() {
         onToggleShakeToExtend={setSleepShakeToExtend}
       />
 
-      <BookmarksModal
+      <LiveBookmarksModal
         visible={showBookmarks}
         onClose={() => setShowBookmarks(false)}
         libraryItemId={currentSession.libraryItemId || currentSession.libraryItem?.id}
-        currentTime={position}
         onSeek={seek}
       />
 

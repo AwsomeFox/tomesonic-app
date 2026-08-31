@@ -131,6 +131,7 @@ jest.mock("../../navigation/navigationRef", () => ({
 
 import { CastContext } from "react-native-google-cast";
 import PlayerBottomSheet from "../../components/PlayerBottomSheet";
+import * as playerLayoutModule from "../../utils/playerLayout";
 import { computePlayerLayout } from "../../utils/playerLayout";
 import { navigationRef } from "../../navigation/navigationRef";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -1112,5 +1113,35 @@ describe("PlayerBottomSheet — finish-line confetti", () => {
       usePlaybackStore.setState({ position: 3599.5 } as any);
     });
     expect(countParticles(screen.toJSON())).toBe(0);
+  });
+});
+
+describe("PlayerBottomSheet — position tick isolation", () => {
+  // The ~1s playback tick must re-render only the live-position leaves
+  // (PlayerBarsBlock / MiniChapterWave), never the whole four-subtree player —
+  // a top-level `position` subscription here re-rendered the entire sheet,
+  // over every screen, once a second for the life of a playing session, and
+  // that periodic JS-thread stall was a scroll/animation hitch app-wide.
+  it("a position write updates the time labels without re-rendering the player shell", async () => {
+    seedPlayer({ isPlayerExpanded: true, isPlaying: true });
+    await render(<PlayerBottomSheet />);
+
+    // The shell calls computePlayerLayout on every render — a clean spy after
+    // mount means "the shell did not render again".
+    const layoutSpy = jest.spyOn(playerLayoutModule, "computePlayerLayout");
+    layoutSpy.mockClear();
+
+    await act(async () => {
+      usePlaybackStore.setState({ position: 761 } as any); // tick: 700 → 761
+    });
+
+    // Leaves ticked: book elapsed 12:41, chapter elapsed 2:41 (761 - 600).
+    // (The raw labels are deliberately a11y-hidden — spoken forms live on the
+    // row/scrubber — so the query must include hidden elements.)
+    expect(screen.getAllByText("12:41", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2:41", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    // Shell did not re-render.
+    expect(layoutSpy).not.toHaveBeenCalled();
+    layoutSpy.mockRestore();
   });
 });
