@@ -122,6 +122,62 @@ describe("CastController — downloaded/offline session can't cast", () => {
   });
 });
 
+describe("CastController — receiver artwork", () => {
+  it("hands the receiver the SERVER cover URL even when the session carries a local cover file", async () => {
+    // REGRESSION: a downloaded book's session points coverUrl at the on-device
+    // cover FILE (what the in-app player wants offline). The receiver fetches
+    // artwork itself over the network — handing it that path showed NO art on
+    // the TV for exactly the books the user had downloaded.
+    usePlaybackStore.setState({
+      currentSession: { ...session, coverUrl: "file:///data/user/0/app/files/item1_The_Hobbit/cover.jpg" },
+      position: 100,
+      isPlaying: false,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+
+    const items = fake.client.loadMedia.mock.calls[0][0].queueData.items;
+    for (const it of items) {
+      expect(it.mediaInfo.metadata.images).toEqual([
+        { url: "https://abs.example.com/api/items/item1/cover?width=800&format=webp&token=tok" },
+      ]);
+    }
+  });
+
+  it("prefers the canonical server cover URL over an http session cover", async () => {
+    usePlaybackStore.setState({ currentSession: session, position: 100 } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+    const items = fake.client.loadMedia.mock.calls[0][0].queueData.items;
+    expect(items[0].mediaInfo.metadata.images[0].url).toBe(
+      "https://abs.example.com/api/items/item1/cover?width=800&format=webp&token=tok"
+    );
+  });
+});
+
+describe("CastController — loadMedia failure recovery", () => {
+  it("resumes LOCAL playback and ends the cast session when the receiver load fails", async () => {
+    // REGRESSION: local audio is paused right before loadMedia; a rejection
+    // left the app silently stuck (isCasting true, receiver empty, local
+    // paused) with no way out short of killing the cast session by hand.
+    const endCurrentSession = jest.fn().mockResolvedValue(undefined);
+    jest.mocked(CastContext.getSessionManager).mockReturnValue({ endCurrentSession } as any);
+    usePlaybackStore.setState({ currentSession: session, position: 100, isPlaying: true } as any);
+    const fake = makeFakeClient();
+    fake.client.loadMedia.mockRejectedValue(new Error("receiver says no"));
+    await mountWithClient(fake);
+
+    // Local was paused for the handoff, then resumed by the recovery…
+    expect(TrackPlayer.pause).toHaveBeenCalled();
+    expect(TrackPlayer.play).toHaveBeenCalled();
+    expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    // …the store no longer routes transport to the dead cast client…
+    expect(usePlaybackStore.getState().isCasting).toBe(false);
+    // …and the broken cast session is torn down.
+    expect(endCurrentSession).toHaveBeenCalled();
+  });
+});
+
 describe("CastController — connect + queue load", () => {
   it("loads the whole book as a queue with offsets, startIndex and startTime", async () => {
     usePlaybackStore.setState({
