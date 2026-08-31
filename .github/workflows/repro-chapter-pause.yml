@@ -69,7 +69,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: native/android/app/build/outputs/apk/release/app-release.apk
-          key: e2e-apk-x86_64-${{ hashFiles('native/**', '!native/.maestro/**') }}
+          # NOTE: actions/cache re-evaluates this expression in its POST (save)
+          # step, when node_modules and the android build outputs exist — an
+          # un-excluded 'native/**' hash that took seconds at restore time then
+          # blows GitHub's hard 120s hashFiles limit and fails the whole job
+          # after every successful source build (and saves under a key no
+          # future restore computes). Hash only the checkout-time source tree.
+          key: e2e-apk-x86_64-${{ hashFiles('native/**', '!native/.maestro/**', '!native/node_modules/**', '!native/**/build/**', '!native/**/.cxx/**', '!native/android/.gradle/**') }}
 
       - name: ccache
         if: steps.apk-cache.outputs.cache-hit != 'true'
