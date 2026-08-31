@@ -48,3 +48,21 @@ describe("clampedPeakAmp", () => {
     expect(clampedPeakAmp(3, 4, 10)).toBe(0); // explicit amp can't beat a negative ceiling
   });
 });
+
+describe("waveShouldScroll", () => {
+  const { waveShouldScroll } = require("../../components/WavyProgress");
+
+  it("scrolls only for a playing, visible wave with motion allowed", () => {
+    expect(waveShouldScroll(true, true, false)).toBe(true);
+  });
+
+  it("never scrolls a hidden instance — the player keeps all four subtrees mounted", () => {
+    // Un-gated, six waves animated per frame with five of them invisible.
+    expect(waveShouldScroll(true, false, false)).toBe(false);
+  });
+
+  it("never scrolls while paused or under OS reduce-motion", () => {
+    expect(waveShouldScroll(false, true, false)).toBe(false);
+    expect(waveShouldScroll(true, true, true)).toBe(false);
+  });
+});

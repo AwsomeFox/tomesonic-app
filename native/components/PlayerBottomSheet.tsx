@@ -194,13 +194,22 @@ function liveChapterFracOf(s: {
 }
 
 /** The mini-player progress wave (both orientations use the same config). */
-function MiniChapterWave({ colors }: { colors: ReturnType<typeof useThemeColors> }) {
+function MiniChapterWave({
+  colors,
+  active,
+}: {
+  colors: ReturnType<typeof useThemeColors>;
+  /** Whether THIS mini bar is the visible one (collapsed + its orientation) —
+   *  gates the wave's per-frame phase scroll (see waveShouldScroll). */
+  active: boolean;
+}) {
   const frac = usePlaybackStore(liveChapterFracOf);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
   return (
     <WavyProgress
       progress={frac}
       playing={isPlaying}
+      active={active}
       color={colors.primary}
       trackColor={withAlpha(colors.primary, 0.2)}
       height={10}
@@ -221,6 +230,7 @@ function MiniChapterWave({ colors }: { colors: ReturnType<typeof useThemeColors>
  */
 function PlayerBarsBlock({
   landscape,
+  active,
   colors,
   showBook,
   showChapter,
@@ -232,6 +242,9 @@ function PlayerBarsBlock({
   scrubberHeight,
 }: {
   landscape: boolean;
+  /** Whether this block is the visible one (expanded + its orientation) —
+   *  gates both waves' per-frame phase scroll (see waveShouldScroll). */
+  active: boolean;
   colors: ReturnType<typeof useThemeColors>;
   showBook: boolean;
   showChapter: boolean;
@@ -371,6 +384,7 @@ function PlayerBarsBlock({
         <WavyProgress
           progress={bookFrac}
           playing={isPlaying}
+          active={active}
           color={colors.primary}
           trackColor={withAlpha(colors.primary, 0.35)}
           height={bookBarHeight}
@@ -403,6 +417,7 @@ function PlayerBarsBlock({
         <WavyProgress
           progress={chapterFrac}
           playing={isPlaying}
+          active={active}
           color={colors.primary}
           trackColor={withAlpha(colors.primary, 0.22)}
           height={22}
@@ -458,6 +473,18 @@ function LiveBookmarksModal(
   return <BookmarksModal {...props} currentTime={position} />;
 }
 
+/**
+ * Same pattern for the sleep timer: its countdown rewrites the sleepTimer
+ * object every second while armed, and the modal shows it live only while
+ * open — closed, the selector returns a constant null and never re-renders.
+ */
+function LiveSleepTimerModal(
+  props: Omit<React.ComponentProps<typeof SleepTimerModal>, "timer">
+) {
+  const timer = usePlaybackStore((s) => (props.visible ? s.sleepTimer : null));
+  return <SleepTimerModal {...props} timer={timer} />;
+}
+
 // Consolidated bottom pill: [speed][Sleep][Bookmark]. Hoisted (like
 // CircleButton) so it keeps a stable component identity across the ~1s
 // position re-renders, and shared verbatim between the portrait cascade and
@@ -467,7 +494,6 @@ function LiveBookmarksModal(
 function BottomPillRow({
   colors,
   speedLabel,
-  sleepTimer,
   onSpeed,
   onSleep,
   onBookmarks,
@@ -477,7 +503,6 @@ function BottomPillRow({
 }: {
   colors: ReturnType<typeof useThemeColors>;
   speedLabel: string;
-  sleepTimer: { remaining: number } | null;
   onSpeed: () => void;
   onSleep: () => void;
   onBookmarks: () => void;
@@ -485,6 +510,11 @@ function BottomPillRow({
   compact?: boolean;
   testID: string;
 }) {
+  // Subscribed HERE, not in the player shell: the countdown rewrites the
+  // sleepTimer object every second while a timer is armed, and only this
+  // pill's sleep chip (and the open sleep modal) render it — the shell must
+  // not re-render per tick. Same isolation as the live-position leaves.
+  const sleepTimer = usePlaybackStore((s) => s.sleepTimer);
   const btnStyle = (bg: string) => ({
     flex: 1,
     flexDirection: "row" as const,
@@ -627,7 +657,9 @@ export default function PlayerBottomSheet() {
   const nextChapter = usePlaybackStore((s) => s.nextChapter);
   const previousChapter = usePlaybackStore((s) => s.previousChapter);
   const seekToChapter = usePlaybackStore((s) => s.seekToChapter);
-  const sleepTimer = usePlaybackStore((s) => s.sleepTimer);
+  // sleepTimer is deliberately NOT subscribed here — its countdown rewrites
+  // the object every second while armed; only the pill's sleep chip and the
+  // open sleep modal render it (BottomPillRow / LiveSleepTimerModal above).
   const setSleepTimer = usePlaybackStore((s) => s.setSleepTimer);
   const cancelSleepTimer = usePlaybackStore((s) => s.cancelSleepTimer);
   // Per-book speed memory + sleep-timer extras (settings surfaced in modals).
@@ -1497,6 +1529,7 @@ export default function PlayerBottomSheet() {
                   serves as the marginTop either way. */}
               <PlayerBarsBlock
                 landscape={false}
+                active={isPlayerExpanded && !isLandscape}
                 colors={colors}
                 showBook={showPlayerBookProgress !== false}
                 showChapter={showPlayerChapterProgress !== false}
@@ -1540,7 +1573,6 @@ export default function PlayerBottomSheet() {
                 testID="player-bottom-pill"
                 colors={colors}
                 speedLabel={speedLabel}
-                sleepTimer={sleepTimer}
                 onSpeed={() => { setShowSpeed(true); }}
                 onSleep={() => { setShowSleepTimer(true); }}
                 onBookmarks={() => { setShowBookmarks(true); }}
@@ -1865,7 +1897,7 @@ export default function PlayerBottomSheet() {
             animatedMiniProgressStyle,
           ]}
         >
-          <MiniChapterWave colors={colors} />
+          <MiniChapterWave colors={colors} active={!isPlayerExpanded && !isLandscape} />
         </Animated.View>
         </View>
 
@@ -1910,7 +1942,7 @@ export default function PlayerBottomSheet() {
                 to the text zone: cover ends x=62, the transport cluster starts
                 ~176 from the right edge (44+10+56+10+44 + 12 padding). */}
             <View pointerEvents="none" style={{ position: "absolute", left: 74, right: 184, top: MINIPLAYER_HEIGHT - 10 }}>
-              <MiniChapterWave colors={colors} />
+              <MiniChapterWave colors={colors} active={!isPlayerExpanded && isLandscape} />
             </View>
           </Animated.View>
 
@@ -1976,6 +2008,7 @@ export default function PlayerBottomSheet() {
                     as portrait (its own instance, its own drag state). */}
                 <PlayerBarsBlock
                   landscape
+                  active={isPlayerExpanded && isLandscape}
                   colors={colors}
                   showBook={showPlayerBookProgress !== false}
                   showChapter={showPlayerChapterProgress !== false}
@@ -2011,7 +2044,6 @@ export default function PlayerBottomSheet() {
                   testID="player-bottom-pill-landscape"
                   colors={colors}
                   speedLabel={speedLabel}
-                  sleepTimer={sleepTimer}
                   onSpeed={() => { setShowSpeed(true); }}
                   onSleep={() => { setShowSleepTimer(true); }}
                   onBookmarks={() => { setShowBookmarks(true); }}
@@ -2051,10 +2083,9 @@ export default function PlayerBottomSheet() {
         onToggleRememberPerBook={setRememberSpeedPerBook}
       />
 
-      <SleepTimerModal
+      <LiveSleepTimerModal
         visible={showSleepTimer}
         onClose={() => setShowSleepTimer(false)}
-        timer={sleepTimer}
         hasChapter={!!currentChapter}
         onSet={(seconds, endOfChapter) => {
           if (endOfChapter) {

@@ -1144,4 +1144,25 @@ describe("PlayerBottomSheet — position tick isolation", () => {
     expect(layoutSpy).not.toHaveBeenCalled();
     layoutSpy.mockRestore();
   });
+
+  // Same isolation for the sleep-timer countdown: it rewrites the sleepTimer
+  // object every second while armed, and only the pill's sleep chip (and the
+  // open sleep modal) subscribe to it.
+  it("a sleep-timer tick updates the pill chip without re-rendering the player shell", async () => {
+    seedPlayer({ isPlayerExpanded: true, isPlaying: true });
+    await render(<PlayerBottomSheet />);
+
+    const layoutSpy = jest.spyOn(playerLayoutModule, "computePlayerLayout");
+    layoutSpy.mockClear();
+
+    await act(async () => {
+      usePlaybackStore.setState({ sleepTimer: { endOfChapter: false, remaining: 300 } } as any);
+    });
+
+    // Pill chips (portrait + landscape instances) show the live countdown…
+    expect(screen.getAllByText("5:00").length).toBeGreaterThan(0);
+    // …and the shell did not re-render.
+    expect(layoutSpy).not.toHaveBeenCalled();
+    layoutSpy.mockRestore();
+  });
 });

@@ -23,6 +23,16 @@ export function clampedPeakAmp(height: number, strokeWidth: number, amplitude?: 
   return Math.max(0, Math.min(amplitude ?? (height - strokeWidth) / 2 - 1, (height - strokeWidth) / 2));
 }
 
+/** Whether the endless phase scroll may run. The scroll re-evaluates the
+ *  animated path every frame for as long as it is armed, so it must run ONLY
+ *  for a wave the user can actually see (`active`): the player keeps all four
+ *  subtrees mounted (portrait + landscape × mini + full), and un-gated, six
+ *  waves animated every frame with five of them invisible. Exported for
+ *  tests. */
+export function waveShouldScroll(playing: boolean, active: boolean, reduceMotion: boolean): boolean {
+  return playing && active && !reduceMotion;
+}
+
 // M3 Expressive wavy linear progress: the played portion is a scrolling sine
 // wave (amplitude springs to flat when paused), the remainder is a flat track
 // separated by a small gap, with a stop dot at the far end. Read-only — for
@@ -34,6 +44,7 @@ const STOP_R = 2.5; // stop-indicator dot radius
 export default function WavyProgress({
   progress, // 0..1
   playing,
+  active = true,
   color,
   trackColor,
   height = 18,
@@ -47,6 +58,10 @@ export default function WavyProgress({
 }: {
   progress: number;
   playing: boolean;
+  /** Whether this instance is actually visible to the user. The player mounts
+   *  every orientation/state subtree permanently, so a hidden wave must not
+   *  keep the per-frame phase scroll running — see waveShouldScroll. */
+  active?: boolean;
   color: string;
   trackColor: string;
   height?: number;
@@ -79,10 +94,11 @@ export default function WavyProgress({
   const peakAmp = clampedPeakAmp(height, strokeWidth, amplitude);
 
   useEffect(() => {
-    // The wave only scrolls while playing so the bar reads as "alive" during
-    // playback and calm when paused. When reduced motion is on, never start the
-    // endless phase scroll — hold the wave static.
-    if (playing && !reduceMotion) {
+    // The wave only scrolls while playing AND visible, so the bar reads as
+    // "alive" during playback and calm when paused, without hidden instances
+    // burning frames. When reduced motion is on, never start the endless
+    // phase scroll — hold the wave static.
+    if (waveShouldScroll(playing, active, reduceMotion)) {
       phase.value = withRepeat(withTiming(phase.value + 1, { duration: 1000, easing: Easing.linear }), -1, false);
     } else {
       cancelAnimation(phase);
@@ -93,7 +109,7 @@ export default function WavyProgress({
       cancelAnimation(phase);
       cancelAnimation(amp);
     };
-  }, [playing, reduceMotion]);
+  }, [playing, active, reduceMotion]);
 
   useEffect(() => {
     // Wave rises to full amplitude while playing; if flattenWhenPaused it settles
@@ -121,10 +137,14 @@ export default function WavyProgress({
     const a = amp.value;
     const ph = phase.value;
     let d = "";
-    const step = 1.5;
+    // This runs EVERY FRAME while the phase scrolls — sample the sine at
+    // 2.5dp (~16-19 points per wavelength, visually indistinguishable under
+    // a round-capped 2.5-4dp stroke) and keep coordinates to 0.1dp so the
+    // built string stays as small as the wave allows.
+    const step = 2.5;
     for (let x = 0; x <= currentEndX; x += step) {
       const y = cy + a * Math.sin((x / wavelength + ph) * Math.PI * 2);
-      d += (x === 0 ? "M " : "L ") + x.toFixed(2) + " " + y.toFixed(2);
+      d += (x === 0 ? "M " : "L ") + x.toFixed(1) + " " + y.toFixed(1);
     }
     return { d };
   });
