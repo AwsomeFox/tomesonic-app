@@ -890,8 +890,12 @@ export default function PlayerBottomSheet() {
     return {
       width: SIDE_BTN,
       height: SIDE_BTN,
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
+      // Position rides the SAME [0.8, 1] window as the fade: the button is
+      // invisible below 0.8 anyway, and a p-range position would otherwise
+      // park an invisible-but-tappable target mid-flight over the cover
+      // while pointerEvents is already "auto".
+      left: interpolate(p, [0.8, 1], [leftCollapsed, leftExpanded], Extrapolation.CLAMP),
+      top: interpolate(p, [0.8, 1], [topCollapsed, topExpanded], Extrapolation.CLAMP),
       borderRadius: SIDE_BTN / 2,
       opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };
@@ -900,7 +904,8 @@ export default function PlayerBottomSheet() {
   // Morph Skip Next Button (fade in/out, centered in the transport row)
   const animatedSkipNextStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    // Fully off-screen right (mirror of skip-previous above).
+    // Fully off-screen right (mirror of skip-previous above, same
+    // fade-window position gating).
     const leftCollapsed = screenWidth + 16;
     const leftExpanded = SKIP_NEXT_X;
     const topCollapsed = 12;
@@ -909,8 +914,8 @@ export default function PlayerBottomSheet() {
     return {
       width: SIDE_BTN,
       height: SIDE_BTN,
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
+      left: interpolate(p, [0.8, 1], [leftCollapsed, leftExpanded], Extrapolation.CLAMP),
+      top: interpolate(p, [0.8, 1], [topCollapsed, topExpanded], Extrapolation.CLAMP),
       borderRadius: SIDE_BTN / 2,
       opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };

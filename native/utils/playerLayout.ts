@@ -206,6 +206,13 @@ export interface PlayerLayout {
  * 2dp → surrender the breathing margin → finally scale the buttons BELOW the
  * floors (the buttons carry hitSlop, so the touch area outlives the visuals).
  * A row that fits the window always beats one that runs off its edge.
+ *
+ * HARD FLOOR — 146dp: the visual minimums (4×28 side + 34 play, zero gaps)
+ * pack into 146dp and no lower; a narrower column pins there and overflows by
+ * the shortfall. That is deliberate scope: Android's minimum resizable-window
+ * widths sit well above 146dp, and glyphs below the 28/34 minimums stop being
+ * drawable buttons at all — so sub-146dp windows are out of the design space
+ * rather than another rung.
  */
 function transportGeometry(colWidth: number, idealSide: number, idealPlay: number) {
   const idealGap = 16;
