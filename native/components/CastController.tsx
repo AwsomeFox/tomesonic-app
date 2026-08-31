@@ -258,6 +258,9 @@ export default function CastController() {
     if (loadedKeyRef.current === key) return;
     loadedKeyRef.current = key;
     const gen = ++genRef.current;
+    // Whether the book was playing when we paused local audio for the load —
+    // read by the failure recovery below, so it must outlive the try block.
+    let wasPlayingBeforeLoad = false;
 
     (async () => {
       try {
@@ -279,11 +282,19 @@ export default function CastController() {
           loadedKeyRef.current = null;
           return;
         }
+        // The receiver fetches artwork itself, over the network — it can never
+        // read a phone-local cover. session.coverUrl points at the downloaded
+        // cover FILE whenever the book has one (that's what the in-app player
+        // wants offline), which is exactly when cast art went missing: the TV
+        // was handed a file:// path. Always derive the server cover URL for
+        // the receiver; fall back to the session URL only when it is already
+        // an http(s) URL (run through abs() so it carries the token).
+        const sessionCover = String(currentSession.coverUrl || "");
         const coverUrl =
-          currentSession.coverUrl ||
           (itemId && serverAddress
-            ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}`
-            : undefined);
+            ? abs(`/api/items/${itemId}/cover?width=800&format=webp`)
+            : undefined) ||
+          (/^https?:\/\//i.test(sessionCover) ? abs(sessionCover) : undefined);
 
         // Build the queue + cumulative offsets so the whole book plays.
         let acc = 0;
@@ -325,7 +336,8 @@ export default function CastController() {
         // receiver loads (no double-audio overlap), and only autoplay on the
         // receiver if the book was actually playing — connecting while paused
         // must not start blasting the TV.
-        const wasPlaying = usePlaybackStore.getState().isPlaying;
+        wasPlayingBeforeLoad = usePlaybackStore.getState().isPlaying;
+        const wasPlaying = wasPlayingBeforeLoad;
         try {
           await TrackPlayer.pause();
         } catch {}
@@ -352,10 +364,36 @@ export default function CastController() {
         registerSeekHandler(client);
       } catch (e) {
         console.warn("[Cast] loadMedia failed", e);
-        // Only invalidate the dedupe key if WE are still the current load —
-        // a stale load rejecting late must not clobber a healthy newer one
-        // (that turned a mere speed change into a full queue reload).
-        if (gen === genRef.current) loadedKeyRef.current = null;
+        // Only recover if WE are still the current load — a stale load
+        // rejecting late must not clobber a healthy newer one (that turned a
+        // mere speed change into a full queue reload).
+        if (gen !== genRef.current) return;
+        loadedKeyRef.current = null;
+        settleRef.current = null;
+        // The local player was paused just before loadMedia, so a failed load
+        // used to leave the app silently stuck: isCasting true, receiver
+        // empty, local paused, no recovery. Hand control straight back to
+        // LOCAL playback and end the cast session — marking the cast as over
+        // NOW (not via the client→null event) so the suspension-grace
+        // handback can't run a second, delayed resume on top of this one.
+        wasCastingRef.current = false;
+        setCastState(null);
+        usePlaybackStore.getState().setCastSeekHandler(null);
+        if (Platform.OS === "android") {
+          ToastAndroid.show(
+            "Couldn't start casting — playing on this device.",
+            ToastAndroid.LONG
+          );
+        }
+        Promise.resolve()
+          .then(() => CastContext.getSessionManager().endCurrentSession(true))
+          .catch((err: any) => console.warn("[Cast] end failed session", err));
+        if (wasPlayingBeforeLoad) {
+          try {
+            await TrackPlayer.play();
+            usePlaybackStore.setState({ isPlaying: true });
+          } catch {}
+        }
       }
     })();
   }, [client, currentSession]);
