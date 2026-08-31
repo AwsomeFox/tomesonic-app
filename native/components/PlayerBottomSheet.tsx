@@ -332,7 +332,8 @@ function PlayerBarsBlock({
   const chapterRemaining = chapterSpan > 0 ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
 
   // Screen-reader support for the chapter scrubber: a pan-only surface is
-  // invisible to TalkBack, so expose it as an adjustable with ±30s steps.
+  // invisible to TalkBack, so expose it as an adjustable whose steps are the
+  // user-configured jump amounts (jumpBackSecs / jumpFwdSecs).
   const scrubA11yProps = {
     accessible: true,
     accessibilityRole: "adjustable" as const,
