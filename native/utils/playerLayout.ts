@@ -252,8 +252,10 @@ export function computePlayerLayout({
   // horizontal paddings, the cover column (LS_COVER + 16), and the pane's own
   // 8dp horizontal paddings. The landscape transport row is sized INTO this —
   // its old fixed 56/56/72/56/56 + 16dp gaps span (360dp) overflowed the pane
-  // on short display-scaled landscapes.
-  const LS_PANE_W = screenWidth - 32 - (LS_COVER + 16) - 16;
+  // on short display-scaled landscapes. Floored at 0: absurdly narrow
+  // landscape windows would otherwise export a negative width into every
+  // downstream consumer.
+  const LS_PANE_W = Math.max(0, screenWidth - 32 - (LS_COVER + 16) - 16);
   const lsT = transportGeometry(LS_PANE_W, 56, 72);
   const LS_SIDE_BTN = lsT.side;
   const LS_PLAY_BTN = lsT.play;

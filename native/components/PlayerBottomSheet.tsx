@@ -101,6 +101,10 @@ function CircleButton({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      // Same slop as the portrait transport overlays: when the layout shrinks
+      // the visuals below the 44dp guideline (degenerate windows), the touch
+      // area outlives them.
+      hitSlop={6}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled: !!disabled }}
@@ -115,7 +119,9 @@ function CircleButton({
     >
       <Icon
         name={icon}
-        size={iconSize}
+        // Glyph tracks a shrunken button (unchanged at the 56dp design size,
+        // where size/2 >= the passed 22/24).
+        size={Math.min(iconSize, Math.round(size / 2))}
         color={
           disabled
             ? withAlpha(colors.onSecondaryContainer, 0.4)
@@ -1864,8 +1870,9 @@ export default function PlayerBottomSheet() {
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: LS_T_GAP, marginTop: 10 }}>
                   <CircleButton icon="skip-previous" iconSize={22} size={LS_SIDE_BTN} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
                   <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { playPause().catch(() => {}); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: LS_PLAY_BTN, height: LS_PLAY_BTN, borderRadius: isPlaying ? Math.round(LS_PLAY_BTN * 0.3) : LS_PLAY_BTN / 2, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
-                    <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
+                  <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: LS_PLAY_BTN, height: LS_PLAY_BTN, borderRadius: isPlaying ? Math.round(LS_PLAY_BTN * 0.3) : LS_PLAY_BTN / 2, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                    {/* 36 at the 72dp design size — tracks a shrunken button. */}
+                    <Icon name={isPlaying ? "pause" : "play"} size={Math.min(36, Math.round(LS_PLAY_BTN / 2))} color={colors.onPrimary} />
                   </Pressable>
                   <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} size={LS_SIDE_BTN} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
                   <CircleButton icon="skip-next" iconSize={22} size={LS_SIDE_BTN} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />

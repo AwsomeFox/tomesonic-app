@@ -569,5 +569,20 @@ describe("computePlayerLayout", () => {
       expect(l.LS_SIDE_BTN).toBeGreaterThanOrEqual(44);
       expect(l.LS_PLAY_BTN).toBeGreaterThanOrEqual(56);
     });
+
+    it("LS_PANE_W is never negative, even on absurdly narrow landscape windows", () => {
+      const l = computePlayerLayout({
+        screenWidth: 180,
+        screenHeight: 160,
+        insetTop: 0,
+        insetBottom: 0,
+        showBookProgress: true,
+      });
+      expect(l.LS_PANE_W).toBeGreaterThanOrEqual(0);
+      // And the geometry it feeds stays sane (floors, non-negative gap).
+      expect(l.LS_SIDE_BTN).toBeGreaterThanOrEqual(28);
+      expect(l.LS_PLAY_BTN).toBeGreaterThanOrEqual(34);
+      expect(l.LS_T_GAP).toBeGreaterThanOrEqual(0);
+    });
   });
 });
