@@ -292,7 +292,7 @@ export default function CastController() {
         const sessionCover = String(currentSession.coverUrl || "");
         const coverUrl =
           (itemId && serverAddress
-            ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}`
+            ? abs(`/api/items/${itemId}/cover?width=800&format=webp`)
             : undefined) ||
           (/^https?:\/\//i.test(sessionCover) ? abs(sessionCover) : undefined);
 
