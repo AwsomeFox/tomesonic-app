@@ -379,12 +379,18 @@ class PlayerConnection(
         val session = PlaybackState.active.value
         if (windowChapterIndex(controller) != null) {
             // Chapter-window timeline: address the seek to the window that
-            // contains the target, positioned relative to that chapter.
+            // contains the target, positioned relative to that chapter. The
+            // index is "last chapter whose start <= target" — the SAME rule
+            // ChapterForwardingPlayer maps windows by — NOT chapterIndexAt,
+            // whose [start,end) intervals return -1 at exactly the book end
+            // (a seekBy clamped to the duration) and inside table gaps;
+            // falling through to the track path there would address a CHAPTER
+            // window with a TRACK index.
             val chapters = session?.chapters.orEmpty()
-            val idx = ChapterMath.chapterIndexAt(absoluteSeconds, chapters)
-            val chapterStart = chapters.getOrNull(idx)?.start
-            if (chapterStart != null) {
-                val relMs = ((absoluteSeconds - chapterStart).coerceAtLeast(0.0) * 1000.0).toLong()
+            if (chapters.isNotEmpty()) {
+                val idx = chapters.indexOfLast { it.start <= absoluteSeconds }.coerceAtLeast(0)
+                val relMs =
+                    ((absoluteSeconds - chapters[idx].start).coerceAtLeast(0.0) * 1000.0).toLong()
                 controller.seekTo(idx, relMs)
                 return
             }
