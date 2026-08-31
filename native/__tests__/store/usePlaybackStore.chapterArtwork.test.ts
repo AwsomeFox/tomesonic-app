@@ -30,6 +30,7 @@ jest.mock("../../utils/autoCreds", () => ({
   readAutoCreds: jest.fn().mockResolvedValue(null),
   writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
+  writeAutoChapters: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock("../../utils/downloader", () => ({
   downloader: {},
@@ -41,6 +42,7 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import {
   usePlaybackStore,
   MAX_CAR_TILE_ITEMS,
+  CHAPTER_QUEUE_MAX_SECONDS,
   onCarControllerConnected,
 } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -303,6 +305,216 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
       0,
       expect.objectContaining({ artwork: freshUrl })
     );
+  });
+
+  it("prepares a VERY long single-file book as ONE flat item (OOM guard), keeping chapters for the UI", async () => {
+    // Each clipped item's prepare re-parses the whole file's moov sample
+    // table (~34MB of arrays for a 28.5h m4b) — hours into a long book the
+    // heap creeps to its cap and a chapter boundary dies with
+    // OutOfMemoryError ("Source error"). Over the duration cap the book
+    // plays as a single item; chapter UX runs on `chapters` + positions.
+    const total = CHAPTER_QUEUE_MAX_SECONDS + 3600; // one hour over the cap
+    const bigChapters = Array.from({ length: 40 }, (_, i) => ({
+      id: i,
+      title: `Chapter ${i + 1}`,
+      start: (i * total) / 40,
+      end: ((i + 1) * total) / 40,
+    }));
+    useDownloadStore.setState({ completedDownloads: {} });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sessBig",
+        libraryItemId: "item1",
+        displayTitle: "The Monster Book",
+        displayAuthor: "Tolkien",
+        duration: total,
+        currentTime: 0,
+        chapters: bigChapters,
+        audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: total, startOffset: 0 }],
+      },
+      false
+    );
+    expect(usePlaybackStore.getState().chapterQueue).toBe(false);
+    expect(addedTracks()).toHaveLength(1);
+    // The chapter UX still has its data.
+    expect(usePlaybackStore.getState().chapters).toHaveLength(40);
+  });
+
+  it("mirrors the book's chapters for the native Android Auto Chapters section", async () => {
+    // The AA browse tree's "Chapters" rows (play:<id>@@<start>) are fed by
+    // this mirror — it is what keeps the chapter list in the car for books
+    // the duration cap prepares FLAT.
+    const { writeAutoChapters } = require("../../utils/autoCreds");
+    jest.mocked(writeAutoChapters).mockClear();
+    await prepareChapterBook();
+    expect(writeAutoChapters).toHaveBeenCalledWith({
+      itemId: "item1",
+      title: "The Hobbit",
+      chapters: [
+        { title: "Chapter 1", start: 0, end: 100 },
+        { title: "Chapter 2", start: 100, end: 200 },
+        { title: "Chapter 3", start: 200, end: 300 },
+      ],
+    });
+  });
+
+  it("keeps the chapter queue for a book exactly AT the duration cap", async () => {
+    const total = CHAPTER_QUEUE_MAX_SECONDS;
+    const chapters = Array.from({ length: 10 }, (_, i) => ({
+      id: i,
+      title: `Chapter ${i + 1}`,
+      start: (i * total) / 10,
+      end: ((i + 1) * total) / 10,
+    }));
+    useDownloadStore.setState({ completedDownloads: {} });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sessCap",
+        libraryItemId: "item1",
+        displayTitle: "The Cap Book",
+        displayAuthor: "Tolkien",
+        duration: total,
+        currentTime: 0,
+        chapters,
+        audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: total, startOffset: 0 }],
+      },
+      false
+    );
+    expect(usePlaybackStore.getState().chapterQueue).toBe(true);
+    expect(addedTracks()).toHaveLength(10);
+  });
+
+  describe("native chapter windows (ChapterForwardingPlayer bridge)", () => {
+    // With the patched service's absSetChapterWindows present, single-file
+    // chaptered books prepare FLAT at ANY length — one media source, one moov
+    // parse — and the session's per-chapter presentation comes from the
+    // window map pushed here. The clipped queue survives only as the
+    // fallback for binaries without the method (every other test in this
+    // file runs with NativeModules.TrackPlayer absent = that fallback).
+    const { NativeModules, Platform } = require("react-native");
+    let prevOS: string;
+    const injectNative = () => {
+      const absSetChapterWindows = jest.fn().mockResolvedValue(undefined);
+      prevOS = Platform.OS;
+      (Platform as any).OS = "android";
+      (NativeModules as any).TrackPlayer = { absSetChapterWindows };
+      return absSetChapterWindows;
+    };
+    afterEach(() => {
+      delete (NativeModules as any).TrackPlayer;
+      if (prevOS) (Platform as any).OS = prevOS;
+    });
+
+    it("prepares a single-file chaptered book FLAT and pushes millisecond windows", async () => {
+      const absSetChapterWindows = injectNative();
+      await prepareChapterBook();
+      expect(usePlaybackStore.getState().chapterQueue).toBe(false);
+      expect(addedTracks()).toHaveLength(1);
+      // Two calls per prepare: the clear at reset (previous book's map must
+      // not overlay the new item), then this book's windows after the add.
+      expect(absSetChapterWindows).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([]);
+      expect(JSON.parse(absSetChapterWindows.mock.calls.at(-1)![0])).toEqual([
+        { title: "Chapter 1", startMs: 0, endMs: 100000 },
+        { title: "Chapter 2", startMs: 100000, endMs: 200000 },
+        { title: "Chapter 3", startMs: 200000, endMs: 300000 },
+      ]);
+      // Single-item queue may carry the LARGE bytes (no Timeline to overflow);
+      // the native adapter strips artwork bytes off the synthetic windows.
+      expect(addedTracks()[0].localArtwork).toBe(COVER);
+    });
+
+    it("ignores the legacy duration cap — a monster book still gets windows over a flat item", async () => {
+      const absSetChapterWindows = injectNative();
+      const total = CHAPTER_QUEUE_MAX_SECONDS + 3600;
+      const bigChapters = Array.from({ length: 40 }, (_, i) => ({
+        id: i,
+        title: `Chapter ${i + 1}`,
+        start: (i * total) / 40,
+        end: ((i + 1) * total) / 40,
+      }));
+      useDownloadStore.setState({ completedDownloads: {} });
+      await usePlaybackStore.getState().preparePlaybackSession(
+        {
+          id: "sessBigWin",
+          libraryItemId: "item1",
+          displayTitle: "The Monster Book",
+          displayAuthor: "Tolkien",
+          duration: total,
+          currentTime: 0,
+          chapters: bigChapters,
+          audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: total, startOffset: 0 }],
+        },
+        false
+      );
+      expect(usePlaybackStore.getState().chapterQueue).toBe(false);
+      expect(addedTracks()).toHaveLength(1);
+      const windows = JSON.parse(
+        jest.mocked(NativeModules.TrackPlayer.absSetChapterWindows).mock.calls.at(-1)![0]
+      );
+      expect(windows).toHaveLength(40);
+      expect(windows[39].endMs).toBe(total * 1000);
+      expect(absSetChapterWindows).toHaveBeenCalled();
+    });
+
+    it("clears the window map when loading a multi-file book", async () => {
+      const absSetChapterWindows = injectNative();
+      useDownloadStore.setState({ completedDownloads: {} });
+      await usePlaybackStore.getState().preparePlaybackSession(
+        {
+          id: "sessMulti",
+          libraryItemId: "item1",
+          displayTitle: "The Split Book",
+          displayAuthor: "Tolkien",
+          duration: 300,
+          currentTime: 0,
+          chapters: CHAPTERS,
+          audioTracks: [
+            { index: 0, contentUrl: "/f0.mp3", duration: 150, startOffset: 0 },
+            { index: 1, contentUrl: "/f1.mp3", duration: 150, startOffset: 150 },
+          ],
+        },
+        false
+      );
+      expect(addedTracks()).toHaveLength(2);
+      // Clear at reset + the multi-file load's own [] — never a window map.
+      expect(absSetChapterWindows).toHaveBeenCalledTimes(2);
+      for (const call of absSetChapterWindows.mock.calls) {
+        expect(JSON.parse(call[0])).toEqual([]);
+      }
+    });
+
+    it("clears the window map when a Cast client attaches", () => {
+      const absSetChapterWindows = injectNative();
+      usePlaybackStore.getState().setCastState({} as any);
+      expect(absSetChapterWindows).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([]);
+    });
+
+    it("subtracts the track startOffset so windows are in PLAYER coordinates", async () => {
+      const absSetChapterWindows = injectNative();
+      useDownloadStore.setState({ completedDownloads: {} });
+      await usePlaybackStore.getState().preparePlaybackSession(
+        {
+          id: "sessOffset",
+          libraryItemId: "item1",
+          displayTitle: "The Offset Book",
+          displayAuthor: "Tolkien",
+          duration: 300,
+          currentTime: 0,
+          chapters: [
+            { id: 0, title: "Chapter 1", start: 10, end: 150 },
+            { id: 1, title: "Chapter 2", start: 150, end: 310 },
+          ],
+          audioTracks: [{ index: 0, contentUrl: "/f0.m4b", duration: 300, startOffset: 10 }],
+        },
+        false
+      );
+      expect(JSON.parse(absSetChapterWindows.mock.calls.at(-1)![0])).toEqual([
+        { title: "Chapter 1", startMs: 0, endMs: 140000 },
+        { title: "Chapter 2", startMs: 140000, endMs: 300000 },
+      ]);
+    });
   });
 
   it("SKIPS the look-ahead pre-stamp while the next item is already prebuffering (boundary safety)", async () => {

@@ -6,7 +6,7 @@ import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
-import { writeWidgetState } from "../utils/autoCreds";
+import { writeWidgetState, writeAutoChapters } from "../utils/autoCreds";
 import { refreshPlayerWidgets } from "../utils/widgetRefresh";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
 import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
@@ -98,6 +98,29 @@ const PAUSE_STRAGGLER_WINDOW_MS = 2000;
 // Rows past the cap show text only (rare — most books are well under 64
 // chapters/files).
 export const MAX_CAR_TILE_ITEMS = 64;
+
+// Longest single-file book that still gets the chapter-per-item queue. Each
+// clipped queue item is its own media3 MediaSource with its OWN extractor,
+// and preparing one re-parses the ENTIRE file's moov sample table into Java
+// arrays that scale with runtime — a 28.5h m4b is ~4.4M samples, a single
+// ~34MB long[] per parse, with the outgoing and incoming items' copies live
+// together at every chapter boundary. The field failure this caps: hours
+// into a long book the heap creeps to its limit and the NEXT boundary's
+// table allocation throws OutOfMemoryError — "Source error", playback dead
+// at exactly a chapter end (worst in the background, where nothing trims
+// caches). Books over the cap prepare as a FLAT single-item queue instead:
+// chapter titles, navigation and seeks all still work (they run on
+// `chapters` + absolute positions — the single-item paths downstream), and
+// the native Android Auto "Chapters" browse section (fed by
+// writeAutoChapters) keeps the chapter list in the car for flat books too,
+// so nothing user-facing is lost. With android:largeHeap (512MB) the cap
+// sits at 20h: ~3.1M samples there → ~75MB of table arrays per parse
+// (largest single allocation ~25MB), and two parses live at a boundary
+// ≈ 150MB of tables — comfortably inside 512MB next to the RN runtime,
+// where the 28.5h field failure (~107MB/parse) was not inside 256MB.
+// Typical audiobooks keep the per-chapter AA queue rows; only true
+// monsters go flat.
+export const CHAPTER_QUEUE_MAX_SECONDS = 20 * 3600;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -296,6 +319,34 @@ function nativeSleepModule(): any | null {
   } catch {
     return null;
   }
+}
+
+// Native per-chapter session presentation (ChapterForwardingPlayer in the
+// track-player patch). When the installed binary has absSetChapterWindows,
+// single-file chaptered books prepare FLAT — one media source, ONE moov
+// sample-table parse at any book length (the OOM-proof shape; see
+// CHAPTER_QUEUE_MAX_SECONDS) — and the service projects a synthetic
+// per-chapter timeline to Android Auto / Bluetooth AVRCP / Wear OS remote
+// controls from these windows. Method-existence gating keeps an OTA-updated
+// JS running on an older binary on the legacy clipped-queue path.
+function nativeChapterWindowsModule(): any | null {
+  try {
+    const RN = require("react-native");
+    if (RN.Platform.OS !== "android") return null;
+    const m = RN.NativeModules?.TrackPlayer;
+    return m?.absSetChapterWindows ? m : null;
+  } catch {
+    return null;
+  }
+}
+function pushNativeChapterWindows(
+  windows: { title: string; startMs: number; endMs: number }[]
+) {
+  try {
+    nativeChapterWindowsModule()
+      ?.absSetChapterWindows?.(JSON.stringify(windows))
+      ?.catch?.(() => {});
+  } catch {}
 }
 function armNativeSleepTimer(seconds: number): boolean {
   const m = nativeSleepModule();
@@ -2058,6 +2109,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // whole session. Clear it here; the receiver reports its own state.
       ...(client ? { isBuffering: false } : { castSeekAbs: null }),
     });
+    // While casting the receiver owns playback — the LOCAL session must stop
+    // presenting chapter windows over a paused local player. Windows return
+    // with the next local prepareSession (transfer-back reloads the queue);
+    // until then a book-level presentation is the correct degraded state.
+    if (client) pushNativeChapterWindows([]);
   },
 
   castSeekAbs: null,
@@ -2793,7 +2849,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // a plain music app, which those head units handle fine. Frozen into
       // carCompatActive for this session below.
       const carCompat = !!useUserStore.getState().settings.carCompatibilityMode;
-      const chapterQueue = chapters.length > 1 && audioTracks.length === 1 && !carCompat;
+      // Duration cap: a VERY long single file must not become 100+ clipped
+      // items — every item prepare re-parses the whole file's ~tens-of-MB
+      // sample table and long sessions OOM at a chapter boundary (see
+      // CHAPTER_QUEUE_MAX_SECONDS). Over the cap the book plays as one item;
+      // chapter UX still runs on `chapters` + absolute positions.
+      const bookSeconds = Number(session.duration) || 0;
+      // Native chapter windows supersede the clipped queue entirely: the
+      // session shows per-chapter queue rows/metadata from ONE flat source
+      // (no per-chapter re-parse, no duration cap, carCompat-safe — the
+      // synthetic timeline is stable and only its index advances, unlike the
+      // clipped queue's per-boundary item churn). The clipped path remains
+      // ONLY as the fallback for binaries without the patched service.
+      const nativeChapterWindows = !!nativeChapterWindowsModule();
+      const chapterQueue =
+        chapters.length > 1 &&
+        audioTracks.length === 1 &&
+        !nativeChapterWindows &&
+        !carCompat &&
+        bookSeconds <= CHAPTER_QUEUE_MAX_SECONDS;
 
       // LOUD local-fallback: a book with a COMPLETED download record whose
       // track can't resolve to a local file used to stream in total silence —
@@ -2911,6 +2985,42 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       _queueSource =
         streamTrackCount === 0 ? "local" : localTrackCount === 0 ? "stream" : "mixed";
+
+      // Mirror the book's chapters for the native Android Auto "Chapters"
+      // browse section (play:<id>@@<start> rows — start-and-seek). Written
+      // for EVERY chaptered book, but it is what keeps full chapter
+      // navigation in the car for books the duration cap prepares FLAT.
+      // Books only — an episode's play id would need the ::episode suffix.
+      // Optional-called: test doubles of autoCreds may not stub it.
+      if (!session.episodeId && chapters.length > 1) {
+        writeAutoChapters?.({
+          itemId: session.libraryItemId,
+          title: bookTitle,
+          chapters: chapters.map((ch: any, i: number) => ({
+            title: ch.title || `Chapter ${i + 1}`,
+            start: ch.start || 0,
+            end: ch.end || 0,
+          })),
+        })?.catch(() => {});
+      }
+
+      // The native ChapterForwardingPlayer's window map for this load. Window
+      // positions are in PLAYER coordinates: the single file's position 0 is
+      // the track's startOffset, so book-absolute chapter times shift down by
+      // it. Computed here (chapters in scope) but PUSHED only after the new
+      // queue is actually added below — pushing before the reset would briefly
+      // overlay the NEW book's map on the OLD book's still-loaded item. A
+      // multi-file book, podcast, or legacy clipped queue pushes [] so it can
+      // never inherit the previous book's windows.
+      const winOff = audioTracks.length === 1 ? Number(audioTracks[0].startOffset) || 0 : 0;
+      const nativeWindowsPayload =
+        nativeChapterWindows && chapters.length > 1 && audioTracks.length === 1
+          ? chapters.map((ch: any, i: number) => ({
+              title: ch.title || `Chapter ${i + 1}`,
+              startMs: Math.max(0, Math.round(((ch.start || 0) - winOff) * 1000)),
+              endMs: Math.max(0, Math.round(((ch.end || 0) - winOff) * 1000)),
+            }))
+          : [];
 
       if (streamedDespiteDownload && download) {
         // Tell the user NOW (they believe this book is on-device) and make
@@ -3040,6 +3150,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.reset();
       if (stale()) return false;
       didReset = true;
+      // The OUTGOING book's window map must be gone before the new item exists
+      // — cleared here (queue empty, adapter pass-through either way) so it
+      // can never overlay the new book's item for even a bridge hop.
+      pushNativeChapterWindows([]);
       // A pending error-retry belongs to the PREVIOUS queue — recovering it
       // now would fight the session being prepared.
       clearErrorRecovery();
@@ -3070,6 +3184,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
       await TrackPlayer.add(tracksToLoad);
       if (stale()) return false;
+      // Queue is loaded — now (and only now) publish this book's window map
+      // (the old book's map was cleared at the reset above).
+      pushNativeChapterWindows(nativeWindowsPayload);
 
       // Restore the speed. Per-book memory (when enabled) wins: a book resumes
       // at the last rate set for THAT book. Otherwise fall back to the restored
@@ -3967,6 +4084,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
 
     await TrackPlayer.reset();
+    // The dismissed book's chapter windows must not survive into whatever the
+    // session presents next (e.g. an Android Auto browse-pool cold start).
+    pushNativeChapterWindows([]);
 
     // Nothing left to recover — a retry firing after close would resurrect
     // the dismissed session's player state.

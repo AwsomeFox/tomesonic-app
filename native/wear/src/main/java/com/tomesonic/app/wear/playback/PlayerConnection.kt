@@ -339,9 +339,28 @@ class PlayerConnection(
         )
     }
 
+    /**
+     * The ChapterForwardingPlayer presents a single-file chaptered book as
+     * per-chapter windows, so the controller's (itemIndex, position) is
+     * CHAPTER-relative there — recognizable by the windows' "abschap-<n>"
+     * mediaIds — and translates via the chapter table instead of the track
+     * table. Track startOffset cancels out of both directions
+     * (rel = abs - chapter.start regardless of the file's offset).
+     */
+    private fun windowChapterIndex(controller: MediaController): Int? {
+        val id = controller.currentMediaItem?.mediaId ?: return null
+        if (!id.startsWith("abschap-")) return null
+        return id.removePrefix("abschap-").toIntOrNull() ?: controller.currentMediaItemIndex
+    }
+
     /** Book-absolute seconds. Falls back to the raw position with no session. */
     private fun absolutePosition(controller: MediaController): Double {
         val session = PlaybackState.active.value ?: return controller.currentPosition / 1000.0
+        windowChapterIndex(controller)?.let { idx ->
+            val chapter = session.chapters.getOrNull(idx)
+                ?: return controller.currentPosition / 1000.0
+            return chapter.start + controller.currentPosition / 1000.0
+        }
         return ChapterMath.absolutePosition(
             session.tracks,
             controller.currentMediaItemIndex,
@@ -357,7 +376,26 @@ class PlayerConnection(
     }
 
     private fun seekToAbsolute(controller: MediaController, absoluteSeconds: Double) {
-        val tracks = PlaybackState.active.value?.tracks
+        val session = PlaybackState.active.value
+        if (windowChapterIndex(controller) != null) {
+            // Chapter-window timeline: address the seek to the window that
+            // contains the target, positioned relative to that chapter. The
+            // index is "last chapter whose start <= target" — the SAME rule
+            // ChapterForwardingPlayer maps windows by — NOT chapterIndexAt,
+            // whose [start,end) intervals return -1 at exactly the book end
+            // (a seekBy clamped to the duration) and inside table gaps;
+            // falling through to the track path there would address a CHAPTER
+            // window with a TRACK index.
+            val chapters = session?.chapters.orEmpty()
+            if (chapters.isNotEmpty()) {
+                val idx = chapters.indexOfLast { it.start <= absoluteSeconds }.coerceAtLeast(0)
+                val relMs =
+                    ((absoluteSeconds - chapters[idx].start).coerceAtLeast(0.0) * 1000.0).toLong()
+                controller.seekTo(idx, relMs)
+                return
+            }
+        }
+        val tracks = session?.tracks
         if (tracks.isNullOrEmpty()) {
             controller.seekTo((absoluteSeconds * 1000.0).toLong())
             return

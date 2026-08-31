@@ -287,9 +287,21 @@ class WearMediaNotificationProvider(
         )
     }
 
-    /** BOOK-absolute seconds: the queue is one media item per track. */
+    /**
+     * BOOK-absolute seconds. The session player is the ChapterForwardingPlayer,
+     * so on a single-file chaptered book the queue it presents is one item per
+     * CHAPTER ("abschap-<n>" mediaIds, chapter-relative positions) — translate
+     * via the chapter table there, via the track table otherwise (one media
+     * item per track).
+     */
     private fun absolutePositionSeconds(player: Player, session: ActiveSession?): Double {
         if (session == null) return 0.0
+        val mediaId = player.currentMediaItem?.mediaId
+        if (mediaId != null && mediaId.startsWith("abschap-")) {
+            val idx = mediaId.removePrefix("abschap-").toIntOrNull() ?: player.currentMediaItemIndex
+            val chapter = session.chapters.getOrNull(idx)
+            if (chapter != null) return chapter.start + player.currentPosition / 1000.0
+        }
         return ChapterMath.absolutePosition(
             session.tracks,
             player.currentMediaItemIndex,
