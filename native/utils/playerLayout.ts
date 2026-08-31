@@ -193,20 +193,39 @@ export interface PlayerLayout {
 
 /**
  * Uniformly scale a 5-button transport row (side, side, play, side, side with
- * equal gaps) into `colWidth`, keeping 8dp of breathing room each side. Floors
- * keep the buttons legal touch targets (44dp) and the play button dominant
- * (56dp); whatever width the floors reclaim comes out of the gaps (floor 6).
- * The gap never exceeds the design 16dp — extra room stays as margin, so a
- * roomy column reproduces the design geometry bit-for-bit.
+ * equal gaps) into `colWidth`, preferring 8dp of breathing room each side.
+ * Floors keep the buttons legal touch targets (44dp side / 56dp play) and the
+ * play button dominant; whatever width the floors reclaim comes out of the
+ * gaps first. The gap never exceeds the design 16dp — extra room stays as
+ * margin, so a roomy column reproduces the design geometry bit-for-bit.
+ *
+ * FITTING BEATS FLOORS: on degenerate columns (split-screen slivers, extreme
+ * display scaling) the touch-target floors plus breathing/gap minimums can
+ * out-size the column — which would reintroduce the exact off-screen overflow
+ * this module exists to eliminate. The ladder there: shrink the gap toward
+ * 2dp → surrender the breathing margin → finally scale the buttons BELOW the
+ * floors (the buttons carry hitSlop, so the touch area outlives the visuals).
+ * A row that fits the window always beats one that runs off its edge.
  */
 function transportGeometry(colWidth: number, idealSide: number, idealPlay: number) {
   const idealGap = 16;
-  const inner = colWidth - 16;
+  let inner = Math.max(0, colWidth - 16);
   const ideal = 4 * idealSide + idealPlay + 4 * idealGap;
   const s = Math.min(1, inner / ideal);
-  const side = Math.max(44, Math.round(idealSide * s));
-  const play = Math.max(56, Math.round(idealPlay * s));
-  const gap = Math.min(idealGap, Math.max(6, Math.floor((inner - 4 * side - play) / 4)));
+  let side = Math.max(44, Math.round(idealSide * s));
+  let play = Math.max(56, Math.round(idealPlay * s));
+  let gap = Math.min(idealGap, Math.max(2, Math.floor((inner - 4 * side - play) / 4)));
+  if (4 * side + play + 4 * gap > inner) {
+    // Breathing surrendered: pack against the full column.
+    inner = Math.max(0, colWidth);
+    const span = 4 * side + play + 4 * gap;
+    if (span > inner && span > 0) {
+      const k = inner / span;
+      side = Math.max(28, Math.floor(side * k));
+      play = Math.max(34, Math.floor(play * k));
+      gap = Math.max(0, Math.floor((inner - 4 * side - play) / 4));
+    }
+  }
   return { side, play, gap };
 }
 

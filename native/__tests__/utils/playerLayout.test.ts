@@ -460,6 +460,46 @@ describe("computePlayerLayout", () => {
       const l = computePlayerLayout(tablet({ screenWidth: 1200 }));
       expect(l.T_GAP).toBe(16);
     });
+
+    it.each([[272], [240], [200], [168]])(
+      "degenerate %sdp column (split-screen sliver): fitting beats the floors",
+      (screenWidth) => {
+        // Below ~272dp the 44/56 touch-target floors + breathing + minimum
+        // gaps out-size the column — the geometry must surrender breathing,
+        // collapse gaps, and finally scale the buttons below the floors
+        // (hitSlop keeps them tappable) rather than run off the window edge.
+        const l = computePlayerLayout({
+          screenWidth,
+          screenHeight: 640,
+          insetTop: 24,
+          insetBottom: 0,
+          showBookProgress: true,
+        });
+        expect(l.SKIP_PREV_X).toBeGreaterThanOrEqual(l.PX - 0.5);
+        expect(l.SKIP_NEXT_X + l.SIDE_BTN).toBeLessThanOrEqual(l.PX + l.PW + 0.5);
+        expect(l.T_GAP).toBeGreaterThanOrEqual(0);
+        expect(l.SIDE_BTN).toBeGreaterThanOrEqual(28);
+        expect(l.PLAY_BTN).toBeGreaterThanOrEqual(34);
+        expect(l.PLAY_BTN).toBeGreaterThan(l.SIDE_BTN);
+      }
+    );
+
+    it("width sweep 146–500dp: the packed row never exceeds the column", () => {
+      // 146dp = the absolute floor ledge (4×28 + 34, zero gaps) — the
+      // narrowest window the row can physically fit; everything at or above
+      // it must fit, dp by dp.
+      for (let w = 146; w <= 500; w += 1) {
+        const l = computePlayerLayout({
+          screenWidth: w,
+          screenHeight: 640,
+          insetTop: 24,
+          insetBottom: 0,
+          showBookProgress: true,
+        });
+        const span = 4 * l.SIDE_BTN + l.PLAY_BTN + 4 * l.T_GAP;
+        expect(span).toBeLessThanOrEqual(l.PW);
+      }
+    });
   });
 
   describe("compact rhythm values", () => {
