@@ -131,10 +131,13 @@ function PlayerChaptersQueueSheet({
   // two window mounts, a relayout, and a visible content jump inside the
   // slide's frame budget. -2 keeps two rows of context above the active row;
   // at index <= 2 that clamps to 0 (the list top).
+  // Undefined (prop omitted) when there are no chapters: initialScrollIndex
+  // must stay within data bounds, and the empty list renders through
+  // ListEmptyComponent with nothing to position.
   const initialChapterScrollIndex =
     chapters.length > 0
       ? Math.min(Math.max(0, currentChapterIndex - 2), chapters.length - 1)
-      : 0;
+      : undefined;
 
   // PanResponder to drive drawer progress via dragging the handle
   const dragRange = sheetHeight - peekHeight - insets.bottom;
