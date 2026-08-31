@@ -63,14 +63,18 @@ class ChapterForwardingPlayer(player: Player) : ForwardingSimpleBasePlayer(playe
     /**
      * Install (or with an empty list clear) the chapter map. Windows only take
      * effect while the underlying timeline has exactly one item — multi-file
-     * books and podcast queues pass through untouched.
+     * books and podcast queues pass through untouched. Runs SYNCHRONOUSLY when
+     * already on the player looper: teardown paths clear the map and then
+     * release the underlying player in the same message, and a posted clear
+     * would land after the release with the boundary tick still scheduled.
      */
     fun setChapters(list: List<ChapterWindow>) {
-        handler.post {
+        val block = Runnable {
             chapters = list.filter { it.endMs > it.startMs }.sortedBy { it.startMs }
             Log.d(TAG, "windows=" + chapters.size)
             invalidateState()
         }
+        if (Looper.myLooper() == handler.looper) block.run() else handler.post(block)
     }
 
     private fun chapterIndexAt(absMs: Long): Int {

@@ -410,8 +410,11 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
       await prepareChapterBook();
       expect(usePlaybackStore.getState().chapterQueue).toBe(false);
       expect(addedTracks()).toHaveLength(1);
-      expect(absSetChapterWindows).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([
+      // Two calls per prepare: the clear at reset (previous book's map must
+      // not overlay the new item), then this book's windows after the add.
+      expect(absSetChapterWindows).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([]);
+      expect(JSON.parse(absSetChapterWindows.mock.calls.at(-1)![0])).toEqual([
         { title: "Chapter 1", startMs: 0, endMs: 100000 },
         { title: "Chapter 2", startMs: 100000, endMs: 200000 },
         { title: "Chapter 3", startMs: 200000, endMs: 300000 },
@@ -474,8 +477,11 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
         false
       );
       expect(addedTracks()).toHaveLength(2);
-      expect(absSetChapterWindows).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([]);
+      // Clear at reset + the multi-file load's own [] — never a window map.
+      expect(absSetChapterWindows).toHaveBeenCalledTimes(2);
+      for (const call of absSetChapterWindows.mock.calls) {
+        expect(JSON.parse(call[0])).toEqual([]);
+      }
     });
 
     it("clears the window map when a Cast client attaches", () => {
@@ -504,7 +510,7 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
         },
         false
       );
-      expect(JSON.parse(absSetChapterWindows.mock.calls[0][0])).toEqual([
+      expect(JSON.parse(absSetChapterWindows.mock.calls.at(-1)![0])).toEqual([
         { title: "Chapter 1", startMs: 0, endMs: 140000 },
         { title: "Chapter 2", startMs: 140000, endMs: 300000 },
       ]);

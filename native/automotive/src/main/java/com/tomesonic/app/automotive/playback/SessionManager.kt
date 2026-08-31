@@ -384,14 +384,22 @@ class SessionManager(
             emptyList()
         }
         withContext(main) {
+            // The OUTGOING book's window map must not overlay the new item for
+            // even a message: clear synchronously (same looper) before the new
+            // queue exists.
+            setChapterWindows(emptyList())
             player.setMediaItems(ready.items, start.trackIndex, (start.positionSeconds * 1000.0).toLong())
             player.setPlaybackSpeed(speed)
             player.prepare()
             player.play()
-            setChapterWindows(chapterWindows)
         }
 
         PlaybackState.set(ready.session)
+        // Publish the chapter windows only AFTER PlaybackState carries the new
+        // book's chapter table: consumers translate the synthetic
+        // chapter-relative timeline back to book-absolute THROUGH that table,
+        // and windows-without-table would briefly mistranslate positions.
+        setChapterWindows(chapterWindows)
         // The Media Center's playback-resumption affordance resolves its target
         // from this (ARCHITECTURE.md §8, quality item EP-2); write it only once
         // the queue is actually loaded so a failed play can't repoint it.

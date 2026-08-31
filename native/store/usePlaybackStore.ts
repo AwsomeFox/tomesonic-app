@@ -3004,23 +3004,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         })?.catch(() => {});
       }
 
-      // Feed (or clear) the native ChapterForwardingPlayer's window map. Sent
-      // on EVERY load so a multi-file book, podcast, or legacy clipped queue
-      // can never inherit the previous book's windows. Window positions are in
-      // PLAYER coordinates: the single file's position 0 is the track's
-      // startOffset, so book-absolute chapter times shift down by it.
-      {
-        const winOff = audioTracks.length === 1 ? Number(audioTracks[0].startOffset) || 0 : 0;
-        pushNativeChapterWindows(
-          nativeChapterWindows && chapters.length > 1 && audioTracks.length === 1
-            ? chapters.map((ch: any, i: number) => ({
-                title: ch.title || `Chapter ${i + 1}`,
-                startMs: Math.max(0, Math.round(((ch.start || 0) - winOff) * 1000)),
-                endMs: Math.max(0, Math.round(((ch.end || 0) - winOff) * 1000)),
-              }))
-            : []
-        );
-      }
+      // The native ChapterForwardingPlayer's window map for this load. Window
+      // positions are in PLAYER coordinates: the single file's position 0 is
+      // the track's startOffset, so book-absolute chapter times shift down by
+      // it. Computed here (chapters in scope) but PUSHED only after the new
+      // queue is actually added below — pushing before the reset would briefly
+      // overlay the NEW book's map on the OLD book's still-loaded item. A
+      // multi-file book, podcast, or legacy clipped queue pushes [] so it can
+      // never inherit the previous book's windows.
+      const winOff = audioTracks.length === 1 ? Number(audioTracks[0].startOffset) || 0 : 0;
+      const nativeWindowsPayload =
+        nativeChapterWindows && chapters.length > 1 && audioTracks.length === 1
+          ? chapters.map((ch: any, i: number) => ({
+              title: ch.title || `Chapter ${i + 1}`,
+              startMs: Math.max(0, Math.round(((ch.start || 0) - winOff) * 1000)),
+              endMs: Math.max(0, Math.round(((ch.end || 0) - winOff) * 1000)),
+            }))
+          : [];
 
       if (streamedDespiteDownload && download) {
         // Tell the user NOW (they believe this book is on-device) and make
@@ -3150,6 +3150,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.reset();
       if (stale()) return false;
       didReset = true;
+      // The OUTGOING book's window map must be gone before the new item exists
+      // — cleared here (queue empty, adapter pass-through either way) so it
+      // can never overlay the new book's item for even a bridge hop.
+      pushNativeChapterWindows([]);
       // A pending error-retry belongs to the PREVIOUS queue — recovering it
       // now would fight the session being prepared.
       clearErrorRecovery();
@@ -3180,6 +3184,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
       await TrackPlayer.add(tracksToLoad);
       if (stale()) return false;
+      // Queue is loaded — now (and only now) publish this book's window map
+      // (the old book's map was cleared at the reset above).
+      pushNativeChapterWindows(nativeWindowsPayload);
 
       // Restore the speed. Per-book memory (when enabled) wins: a book resumes
       // at the last rate set for THAT book. Otherwise fall back to the restored

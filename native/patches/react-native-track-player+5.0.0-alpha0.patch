@@ -503,10 +503,10 @@ index 13a6c60..b9e996e 100644
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt
 new file mode 100644
-index 0000000..a049d94
+index 0000000..dcc19c9
 --- /dev/null
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/ChapterForwardingPlayer.kt
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,236 @@
 +package com.doublesymmetry.trackplayer.service
 +
 +import android.os.Handler
@@ -575,14 +575,18 @@ index 0000000..a049d94
 +    /**
 +     * Install (or with an empty list clear) the chapter map. Windows only take
 +     * effect while the underlying timeline has exactly one item — multi-file
-+     * books and podcast queues pass through untouched.
++     * books and podcast queues pass through untouched. Runs SYNCHRONOUSLY when
++     * already on the player looper: teardown paths clear the map and then
++     * release the underlying player in the same message, and a posted clear
++     * would land after the release with the boundary tick still scheduled.
 +     */
 +    fun setChapters(list: List<ChapterWindow>) {
-+        handler.post {
++        val block = Runnable {
 +            chapters = list.filter { it.endMs > it.startMs }.sortedBy { it.startMs }
 +            Timber.d("ChapterForwardingPlayer windows=%d", chapters.size)
 +            invalidateState()
 +        }
++        if (Looper.myLooper() == handler.looper) block.run() else handler.post(block)
 +    }
 +
 +    private fun chapterIndexAt(absMs: Long): Int {
@@ -740,7 +744,7 @@ index 0000000..a049d94
 +    }
 +}
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..d138c30 100644
+index b495b5a..34afe12 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -3255,13 +3259,17 @@ index b495b5a..d138c30 100644
          return mediaSession
      }
  
-@@ -792,13 +3093,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +3093,54 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
 -        if (::player.isInitialized) {
 -            Timber.d("Releasing media session and destroying player")
 +        absErrRetryDisarm()
++        // Synchronous on this (player) looper: empties the window map and
++        // cancels the adapter's pending boundary tick BEFORE the session and
++        // players are released below — a posted clear would land after them.
++        absChapterPlayer?.setChapters(emptyList())
 +        absCancelSleepTimer()
 +        // Release the LoudnessEnhancer + detach its session listener before the
 +        // player is destroyed below (the effect is bound to its audio session).
@@ -3308,7 +3316,7 @@ index b495b5a..d138c30 100644
          super.onDestroy()
      }
  
-@@ -831,24 +3169,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +3173,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -3369,7 +3377,7 @@ index b495b5a..d138c30 100644
                  }
  
                  else -> null
-@@ -886,6 +3244,20 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3248,20 @@ class MusicService : HeadlessJsMediaService() {
              val isMediaNotificationController = session.isMediaNotificationController(controller)
              val isAutomotiveController = session.isAutomotiveController(controller)
              val isAutoCompanionController = session.isAutoCompanionController(controller)
@@ -3390,7 +3398,7 @@ index b495b5a..d138c30 100644
              emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
                  putString("package", controller.packageName)
                  putBoolean("isMediaNotificationController", isMediaNotificationController)
-@@ -905,24 +3277,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +3281,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -3651,7 +3659,7 @@ index b495b5a..d138c30 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3522,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3526,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -3681,7 +3689,7 @@ index b495b5a..d138c30 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3554,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3558,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3697,7 +3705,7 @@ index b495b5a..d138c30 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3570,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3574,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
