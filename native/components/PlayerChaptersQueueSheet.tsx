@@ -103,7 +103,6 @@ function PlayerChaptersQueueSheet({
   const animDuration = reduceMotion ? 0 : 250;
 
   const subProgress = useSharedValue(0);
-  const scrollRef = useRef<FlatList>(null);
   // True while the handle is being dragged: the body + backdrop must render
   // DURING the gesture, not only after release commits `expanded` — otherwise
   // dragging up reveals an empty sheet that pops its content in at the end.
@@ -123,22 +122,19 @@ function PlayerChaptersQueueSheet({
     // same target with the fresh duration (harmless), instead of going stale.
   }, [expanded, animDuration]);
 
-  // Scroll to active chapter when chapters tab is selected or opened. With
-  // the virtualized list, scrollToIndex + getItemLayout replaces the manual
-  // pitch math (ROW_H + 4px of vertical margins).
-  useEffect(() => {
-    if (expanded && activeTab === "chapters" && currentChapterIndex > 2) {
-      const timer = setTimeout(() => {
-        try {
-          scrollRef.current?.scrollToIndex({
-            index: Math.max(0, currentChapterIndex - 2),
-            animated: false,
-          });
-        } catch {}
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [activeTab, expanded, currentChapterIndex]);
+  // The list lands ALREADY positioned at the active chapter via
+  // initialScrollIndex (the body unmounts when collapsed, so every open and
+  // every tab switch remounts the list and re-applies it). The previous
+  // 50ms-post-mount scrollToIndex was the open stutter the user could see:
+  // one commit mounted a top-of-list window and started the 250ms slide,
+  // then the jump discarded it and mounted a SECOND window at the target —
+  // two window mounts, a relayout, and a visible content jump inside the
+  // slide's frame budget. -2 keeps two rows of context above the active row;
+  // at index <= 2 that clamps to 0 (the list top).
+  const initialChapterScrollIndex =
+    chapters.length > 0
+      ? Math.min(Math.max(0, currentChapterIndex - 2), chapters.length - 1)
+      : 0;
 
   // PanResponder to drive drawer progress via dragging the handle
   const dragRange = sheetHeight - peekHeight - insets.bottom;
@@ -432,7 +428,6 @@ function PlayerChaptersQueueSheet({
                  (ROW_H + 2px margin top/bottom) gives getItemLayout exact
                  offsets, which also powers the scroll-to-current-chapter. */
               <FlatList
-                ref={scrollRef}
                 data={chapters}
                 keyExtractor={(ch: any, i: number) => String(ch?.id ?? i)}
                 style={{ flex: 1 }}
@@ -445,8 +440,13 @@ function PlayerChaptersQueueSheet({
                   offset: (ROW_H + 4) * index,
                   index,
                 })}
+                initialScrollIndex={initialChapterScrollIndex}
                 initialNumToRender={14}
-                windowSize={7}
+                // One viewport either side. The mount happens in the same
+                // frame the open slide starts — a wide window used to keep
+                // filling row batches for several viewports DURING the
+                // animation, each batch a commit competing with the slide.
+                windowSize={3}
                 renderItem={({ item: ch, index: i }: { item: any; index: number }) => {
                   const active = i === currentChapterIndex;
                   return (
