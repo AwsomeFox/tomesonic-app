@@ -254,8 +254,10 @@ export function computePlayerLayout({
   fontScale = 1,
 }: PlayerLayoutInput): PlayerLayout {
   // Text-box scale: matches the maxFontSizeMultiplier 1.3 cap, never shrinks
-  // below the design (accessibility "small" stays at design geometry).
-  const fs = Math.min(1.3, Math.max(1, fontScale));
+  // below the design (accessibility "small" stays at design geometry). A
+  // non-finite input (NaN/Infinity would survive the min/max and poison every
+  // downstream height) falls back to the design scale.
+  const fs = Number.isFinite(fontScale) ? Math.min(1.3, Math.max(1, fontScale)) : 1;
   // Responsive layout for the expanded player. Rather than stretching edge to
   // edge, the content lives in a centered, max-width column (PW) so it stays
   // balanced on tablets (Pixel Tablet portrait is ~800dp wide); on phones PW ==

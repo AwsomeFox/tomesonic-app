@@ -636,6 +636,14 @@ describe("computePlayerLayout", () => {
       expect(small).toEqual(computePlayerLayout(phone({ fontScale: 1 })));
     });
 
+    it("non-finite fontScale falls back to the design scale instead of poisoning the cascade", () => {
+      // NaN survives min/max clamping (Math.max(1, NaN) === NaN), which would
+      // turn every downstream height/Y into NaN — guard must catch it.
+      const base = computePlayerLayout(phone());
+      expect(computePlayerLayout(phone({ fontScale: NaN }))).toEqual(base);
+      expect(computePlayerLayout(phone({ fontScale: Infinity }))).toEqual(base);
+    });
+
     it("grown boxes feed the fit math: the compact screenshot case still clears the peek", () => {
       // Near-square foldable portrait at large display + font scale — the
       // configuration from the field screenshot.

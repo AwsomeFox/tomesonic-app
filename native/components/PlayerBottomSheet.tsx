@@ -1451,8 +1451,8 @@ export default function PlayerBottomSheet() {
                     parking it here raises the cover a full label row + gap,
                     which height-starved screens spend on art. Absolute so it
                     stays out of the row's space-between math, inset past both
-                    button clusters so it can never sit under them; pointer-
-                    Events none keeps the bar's touch targets whole. */}
+                    button clusters so it can never sit under them;
+                    pointerEvents "none" keeps the bar's touch targets whole. */}
                 <View
                   pointerEvents="none"
                   style={{
