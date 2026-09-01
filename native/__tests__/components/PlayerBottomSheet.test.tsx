@@ -649,6 +649,28 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
     expect(store().seekToChapter).toHaveBeenCalledWith(0);
   });
 
+  it("opens the chapter list PRE-POSITIONED at the active chapter (no post-mount jump)", async () => {
+    // The open used to mount a top-of-list window, then a 50ms timer jumped
+    // to the active chapter — a second window mount + visible jump inside the
+    // 250ms slide (the reported open stutter). initialScrollIndex lands the
+    // one and only window at the target.
+    const manyChapters = Array.from({ length: 30 }, (_, i) => ({
+      id: i,
+      title: `Ch ${i + 1}`,
+      start: i * 120,
+      end: (i + 1) * 120,
+    }));
+    seedPlayer({ isPlayerExpanded: true, chapters: manyChapters, currentChapterIndex: 20 });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Chapters and Up Next")[0]);
+    // The initial window starts at index 18 (two rows of context above the
+    // active chapter): the active row is rendered immediately…
+    expect(screen.getAllByText("Ch 21").length).toBeGreaterThan(0);
+    // …and the TOP of the list was never mounted — the old flow rendered a
+    // top window first and jumped away from it 50ms later.
+    expect(screen.queryByText("Ch 1")).toBeNull();
+  });
+
   it("Chapters is disabled without chapters", async () => {
     seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
