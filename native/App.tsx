@@ -3,6 +3,7 @@ import React, { useEffect } from "react";
 import { View, AppState, Linking } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import * as ScreenOrientation from "expo-screen-orientation";
 import AppNavigator from "./navigation/AppNavigator";
 import PlayerBottomSheet from "./components/PlayerBottomSheet";
@@ -23,6 +24,16 @@ import { flushPendingSyncs } from "./utils/progressSync";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { handleWidgetUrl } from "./utils/widgetLaunch";
 import { installHomeRowsMirror } from "./utils/homeRowsMirror";
+
+// Hold the native splash until the app has a REAL first frame. Without this
+// the splash auto-hides on the first JS render — which lands before the user
+// store hydrates, so a cold start cut from the splash to a blank themed
+// surface, then popped the home in when hydration finished: the launch
+// "jump". The splash now covers hydration and fades out over the already-
+// rendered home (cached shelves hydrate synchronously, so they are in that
+// first uncovered frame).
+SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions({ duration: 400, fade: true });
 
 function AppShell() {
   const colors = useThemeColors();
@@ -62,7 +73,30 @@ export default function App() {
   const initializeUser = useUserStore((state) => state.initialize);
   const initializeTheme = useThemeStore((state) => state.initialize);
   const lockOrientation = useUserStore((state) => state.settings.lockOrientation);
+  const isUserInitialized = useUserStore((state) => state.isInitialized);
   const { isConnected } = useNetworkStatus();
+
+  // Release the splash one painted frame AFTER hydration lands — the
+  // navigator swaps from its neutral hold to the real screen on this render,
+  // and the rAF lets that frame commit so the fade reveals content, never the
+  // blank hold. hideAsync is idempotent, so the safety timeout below and this
+  // can both fire.
+  useEffect(() => {
+    if (!isUserInitialized) return;
+    const raf = requestAnimationFrame(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isUserInitialized]);
+
+  // Never strand a launch behind the splash if hydration hangs (corrupt MMKV,
+  // a throwing initializer): the app is still usable underneath.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 4000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Regaining connectivity: push any progress that queued while offline, and
   // give an error-stalled player its stream back (the auto-retry timers are

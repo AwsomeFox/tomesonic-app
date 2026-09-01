@@ -806,6 +806,17 @@ export default function PlayerBottomSheet() {
     playProgress.value = sheetTiming(isPlaying ? 1 : 0);
   }, [isPlaying]);
 
+  // Mini-player ENTRANCE: when a session appears (the launch restore, or the
+  // first play of a book), the whole collapsed card slides up from below the
+  // screen edge instead of popping into place — the last visible jump of a
+  // cold start. Reset on close so the next session slides in again; the
+  // spring folds reduce-motion into an instant snap via sheetSpring.
+  const entranceProgress = useSharedValue(0);
+  const hasSessionForEntrance = !!currentSession;
+  useEffect(() => {
+    entranceProgress.value = hasSessionForEntrance ? sheetSpring(1) : 0;
+  }, [hasSessionForEntrance]);
+
   // Celebrate when a book reaches its end — fires once per session, and only
   // on CROSSING the finish line. Without the crossing check, restoring a
   // session that was saved at the end (reopening an already-finished book)
@@ -1037,7 +1048,13 @@ export default function PlayerBottomSheet() {
   const animatedContainerStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     const collapsedY = screenHeight - MINIPLAYER_HEIGHT - bottomOffsetVal.value;
-    const translateY = collapsedY * (1 - p);
+    // The entrance term starts the card fully below the screen edge and
+    // shrinks to 0 as entranceProgress springs to 1 — the mini player slides
+    // in when a session appears. Once entered it contributes nothing, so the
+    // expand/collapse morph is untouched.
+    const entranceY =
+      (1 - entranceProgress.value) * (MINIPLAYER_HEIGHT + bottomOffsetVal.value);
+    const translateY = collapsedY * (1 - p) + entranceY;
     const height = interpolate(p, [0, 1], [MINIPLAYER_HEIGHT, screenHeight]);
 
     return {
