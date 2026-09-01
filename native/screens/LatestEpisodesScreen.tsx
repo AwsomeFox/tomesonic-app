@@ -250,7 +250,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
   // map keyed `${libraryItemId}-${episode.id}` (same source the rows read).
   const visibleEpisodes = React.useMemo(() => {
     const decorated = episodes.map((ep: any) => {
-      const p = progressMap[`${ep.libraryItemId}-${ep.id}`];
+      const p = ep.libraryItemId && ep.id ? progressMap[`${ep.libraryItemId}-${ep.id}`] : undefined;
       const finished = !!p?.isFinished;
       const fraction = Math.max(0, Math.min(1, Number(p?.progress || 0)));
       return { ep, finished, fraction };
@@ -338,7 +338,12 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     // Played/in-progress state from the shared progress map (same key ItemDetail
     // uses). Finished dims the whole row and appends "· Finished"; an unfinished
     // partial shows a thin progress bar.
-    const epProgress = progressMap[`${episode.libraryItemId}-${episode.id}`];
+    // Guarded like downloadKey: rows missing either id must not read the
+    // shared "undefined-undefined" progress entry.
+    const epProgress =
+      episode.libraryItemId && episode.id
+        ? progressMap[`${episode.libraryItemId}-${episode.id}`]
+        : undefined;
     const epFinished = !!epProgress?.isFinished;
     const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
 

@@ -1298,7 +1298,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // header count still reflects the full total; only the rendered list changes.
   const displayEpisodes: any[] = React.useMemo(() => {
     const decorated = episodes.map((ep: any) => {
-      const p = progressMap[`${itemId}-${ep.id}`];
+      const p = ep.id ? progressMap[`${itemId}-${ep.id}`] : undefined;
       const finished = !!p?.isFinished;
       const fraction = Math.max(0, Math.min(1, Number(p?.progress || 0)));
       return { ep, finished, fraction };
@@ -1412,7 +1412,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       // most recently published unfinished episode (or the latest).
       const nextEpisode =
         episodes.find((ep: any) => {
-          const p = progressMap[`${itemId}-${ep.id}`];
+          const p = ep.id ? progressMap[`${itemId}-${ep.id}`] : undefined;
           return !p?.isFinished;
         }) || episodes[0];
       // playEpisode drives startingEpisodeId (its own guard reads `starting`,
@@ -2664,7 +2664,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   downloadKey={episode.id ? episodeDownloadKey(itemId, episode.id) : ""}
                 >
                 {({ epActiveDl, epDownloaded }) => {
-                const epProgress = progressMap[`${itemId}-${episode.id}`];
+                // Guarded like downloadKey: a no-id episode must not read the
+                // shared "<itemId>-undefined" progress entry.
+                const epProgress = episode.id ? progressMap[`${itemId}-${episode.id}`] : undefined;
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
                 // RSS-derived dates aren't normalized — a garbage value
