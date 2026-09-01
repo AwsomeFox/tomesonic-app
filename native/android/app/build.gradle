@@ -99,8 +99,8 @@ android {
         applicationId 'com.tomesonic.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 20163
-        versionName "2.10.10"
+        versionCode 20164
+        versionName "2.10.11"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
