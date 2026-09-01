@@ -64,7 +64,7 @@ function isAdminUser(u: any): boolean {
 export default function CollectionDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const { collectionId } = route.params || {};
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const isAdmin = useUserStore((s) => isAdminUser(s.user));
   // Feed routes are admin-ONLY server-side — isAdminUser above also passes
   // update-permission non-admins, so gate the RSS affordance on the stricter

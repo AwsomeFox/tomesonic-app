@@ -36,6 +36,7 @@ import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
+import EpisodeDownloadLive from "../components/EpisodeDownloadLive";
 import AddToListModal from "../components/AddToListModal";
 import BottomSheet from "../components/BottomSheet";
 import OpenFeedSheet, { type OpenFeedEntity } from "../components/OpenFeedSheet";
@@ -70,9 +71,9 @@ try {
   Sharing = null;
 }
 
-// Stable empty result for the podcast-gated download-map selectors below — a
+// Stable empty result for the podcast-gated progress-map selector below — a
 // fresh {} per call would defeat the gate (new reference every store write).
-const EMPTY_DOWNLOAD_MAP: Record<string, any> = {};
+const EMPTY_PROGRESS_MAP: Record<string, any> = {};
 
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
 // expiresAt with 0 for "no expiry" — never null).
@@ -124,7 +125,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const { width: screenWidth } = useWindowDimensions();
   const { itemId } = route.params || {};
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const [descExpanded, setDescExpanded] = useState(false);
   // Whether the collapsed description actually overflows 5 lines — drives the
   // "Read more" affordance reliably (a char-count guess misfires on short
@@ -228,12 +229,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const downloadStatus = useDownloadStore((s) =>
     item?.id ? s.activeDownloads[item.id]?.status : undefined
   );
-  // Podcast episode rows need the whole maps (entries keyed per-episode under
-  // composite ids) — subscribe them podcast-gated so a BOOK detail screen
-  // returns stable empties and never re-renders for map churn.
+  // Per-episode download state is subscribed PER ROW via EpisodeDownloadLive
+  // (composite keys) — the screen itself no longer subscribes to the download
+  // maps at all, so a ≥1% progress write re-renders one row, never the screen.
   const isPodcastItem = item?.mediaType === "podcast";
-  const activeDownloads = useDownloadStore((s) => (isPodcastItem ? s.activeDownloads : EMPTY_DOWNLOAD_MAP));
-  const completedDownloads = useDownloadStore((s) => (isPodcastItem ? s.completedDownloads : EMPTY_DOWNLOAD_MAP));
   const isDownloading = downloadStatus === "downloading" || downloadStatus === "pending";
   const isDownloadFailed = downloadStatus === "failed";
 
@@ -243,8 +242,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // an active session AND reflects a just-toggled finished state (the refetch
   // bumps the snapshot's lastUpdate past the map's).
   const liveProgress = useUserStore((s) => (itemId ? s.mediaProgress[itemId] : null));
-  // Full map for podcast episode rows (their entries are keyed `${itemId}-${episodeId}`).
-  const progressMap = useUserStore((s) => s.mediaProgress);
+  // Full map for podcast episode rows/filter (entries keyed
+  // `${itemId}-${episodeId}`). Podcast-gated: a BOOK detail screen gets a
+  // stable empty and never re-renders for map writes (the audio mirror ticks
+  // the map roughly once a minute while anything plays).
+  const progressMap = useUserStore((s) => (isPodcastItem ? s.mediaProgress : EMPTY_PROGRESS_MAP));
   const itemProgress = item?.userMediaProgress || null;
   const progress = React.useMemo(() => {
     if (!liveProgress) return itemProgress;
@@ -2652,7 +2654,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   No episodes match this filter.
                 </Text>
               ) : null}
-              {displayEpisodes.slice(0, episodeLimit).map((episode) => {
+              {displayEpisodes.slice(0, episodeLimit).map((episode) => (
+                <EpisodeDownloadLive key={episode.id} downloadKey={episodeDownloadKey(itemId, episode.id)}>
+                {({ epActiveDl, epDownloaded }) => {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
@@ -2670,10 +2674,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 const subtitleStr = [pubDate, durationStr].filter(Boolean).join(" · ");
                 const isThisPlaying =
                   currentSession?.libraryItemId === itemId && currentSession?.episodeId === episode.id;
-                // Per-episode offline download state (composite-keyed).
-                const epDlKey = episodeDownloadKey(itemId, episode.id);
-                const epActiveDl = activeDownloads[epDlKey];
-                const epDownloaded = !!(completedDownloads[epDlKey] && !epActiveDl);
+                // Per-episode offline download state (epActiveDl/epDownloaded)
+                // arrives from EpisodeDownloadLive's per-key subscriptions.
                 const epDownloading = epActiveDl?.status === "downloading" || epActiveDl?.status === "pending";
                 const epDownloadFailed = epActiveDl?.status === "failed";
                 const epDownloadPct =
@@ -2682,7 +2684,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     : 0;
                 return (
                   <View
-                    key={episode.id}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -2835,7 +2836,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     </Pressable>
                   </View>
                 );
-              })}
+                }}
+                </EpisodeDownloadLive>
+              ))}
               {displayEpisodes.length > episodeLimit ? (
                 <Pressable
                   onPress={() => setEpisodeLimit((n) => n + EPISODE_CAP)}

@@ -108,7 +108,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const { seriesId, seriesName } = route.params || {};
   const { currentLibraryId } = useLibraryStore();
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
   const capabilities = useServerCapabilities();

@@ -56,7 +56,7 @@ function CollectionsPlaylistsScreen(
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const [internalTab, setInternalTab] = useState<Tab>("collections");
   // A hub-supplied `mode` pins the tab; standalone uses the internal toggle.
   const activeTab: Tab = (mode as Tab) ?? internalTab;

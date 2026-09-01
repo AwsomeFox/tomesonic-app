@@ -123,7 +123,8 @@ const BUTTON_HEIGHT = 56;
 
 export default function ConnectScreen() {
   const colors = useThemeColors();
-  const { login, serverConnectionConfig } = useUserStore();
+  const login = useUserStore((s) => s.login);
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   // Previously-connected servers (address + username + authMethod, no secrets).
   const [savedServers, setSavedServers] = useState<SavedServer[]>(loadSavedServers);
   // Seed the address from the active config if present, else from the most

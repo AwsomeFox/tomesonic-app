@@ -50,7 +50,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   const rootNav = navigation?.getParent?.() ?? navigation;
   const currentLibraryId = useLibraryStore((state) => state.currentLibraryId);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const query = useUiStore((s) => s.searchQuery);
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);

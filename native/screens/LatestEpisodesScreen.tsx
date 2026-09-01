@@ -7,6 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
+import EpisodeDownloadLive from "../components/EpisodeDownloadLive";
 import { api } from "../utils/api";
 import { queueProgressPatch } from "../utils/progressSync";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -20,16 +21,15 @@ import { withAlpha } from "../theme/palette";
 export default function LatestEpisodesScreen({ navigation }: any) {
   const colors = useThemeColors();
   const currentLibraryId = useLibraryStore((state) => state.currentLibraryId);
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   // Now-playing session so a row can flip its Play button to the active
   // (headphones-on-primaryContainer) treatment — same as ItemDetail's rows.
   const currentSession = usePlaybackStore((state) => state.currentSession);
-  // Per-episode offline download state (composite-keyed), so the triage screen
-  // can start/cancel/delete a download without opening the podcast.
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
-  const activeDownloads = useDownloadStore((s) => s.activeDownloads);
+  // Per-episode offline download state is subscribed PER ROW (composite keys,
+  // see EpisodeDownloadLive) — the screen doesn't subscribe to the download
+  // maps, so a ≥1% progress write re-renders one row, never this whole list.
   const cancelDownload = useDownloadStore((s) => s.cancelDownload);
   const removeDownload = useDownloadStore((s) => s.removeDownload);
   // Episode progress lives in the global map keyed `${libraryItemId}-${episode.id}`
@@ -312,7 +312,19 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     );
   };
 
-  const renderEpisodeRow = (episode: any, index: number) => {
+  const renderEpisodeRow = (episode: any, index: number) => (
+    <EpisodeDownloadLive
+      // Episode ids are NOT unique across podcasts (composite keys for
+      // progress/downloads) — a bare episode.id can collide between two
+      // podcasts' rows. Key by the same item+episode composite.
+      key={
+        episode.libraryItemId && episode.id
+          ? `${episode.libraryItemId}-${episode.id}`
+          : episode.id || index
+      }
+      downloadKey={episodeDownloadKey(episode.libraryItemId, episode.id)}
+    >
+      {({ epActiveDl, epDownloaded }) => {
     const coverUrl = getCoverUrl(episode.libraryItemId);
     const podcastName = episode.podcast?.metadata?.title || episode.podcastTitle || "";
     // Played/in-progress state from the shared progress map (same key ItemDetail
@@ -328,10 +340,8 @@ export default function LatestEpisodesScreen({ navigation }: any) {
       currentSession?.libraryItemId === episode.libraryItemId &&
       currentSession?.episodeId === episode.id;
 
-    // Per-episode offline download state (composite-keyed).
-    const epDlKey = episodeDownloadKey(episode.libraryItemId, episode.id);
-    const epActiveDl = activeDownloads[epDlKey];
-    const epDownloaded = !!(completedDownloads[epDlKey] && !epActiveDl);
+    // Per-episode offline download state (epActiveDl/epDownloaded) arrives
+    // from EpisodeDownloadLive's per-key subscriptions.
     const epDownloading = epActiveDl?.status === "downloading" || epActiveDl?.status === "pending";
     const epDownloadFailed = epActiveDl?.status === "failed";
     const epDownloadPct =
@@ -346,14 +356,6 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     // is the reference for this pattern).
     return (
       <View
-        // Episode ids are NOT unique across podcasts (see the composite keys
-        // used for progress/download above) — a bare episode.id can collide
-        // between two podcasts' rows. Key by the same item+episode composite.
-        key={
-          episode.libraryItemId && episode.id
-            ? `${episode.libraryItemId}-${episode.id}`
-            : episode.id || index
-        }
         style={{
           flexDirection: "row",
           alignItems: "center",
@@ -598,7 +600,9 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         </Pressable>
       </View>
     );
-  };
+      }}
+    </EpisodeDownloadLive>
+  );
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>

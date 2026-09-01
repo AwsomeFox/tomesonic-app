@@ -75,7 +75,7 @@ function SeriesListScreen(
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const { width } = useWindowDimensions();
   // 2 columns on phones (unchanged); more on wide/tablet layouts so fixed-size
   // cards don't float in oceans of whitespace.

@@ -248,7 +248,7 @@ function LibraryScreen(
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   // The list itself no longer subscribes to the whole mediaProgress /

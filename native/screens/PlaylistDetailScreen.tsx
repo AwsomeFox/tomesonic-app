@@ -32,7 +32,7 @@ function elapsedPretty(seconds: number): string {
 export default function PlaylistDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const { playlistId } = route.params || {};
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   // Reactive subscription (not getState) so episode badges live-update while
   // this screen is open (e.g. an episode playing in the background).
   const mediaProgress = useUserStore((s) => s.mediaProgress);
