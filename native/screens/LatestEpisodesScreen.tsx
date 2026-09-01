@@ -322,7 +322,15 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           ? `${episode.libraryItemId}-${episode.id}`
           : episode.id || index
       }
-      downloadKey={episodeDownloadKey(episode.libraryItemId, episode.id)}
+      // Guard the composite: a row missing either id (the fallback key path
+      // above exists for exactly that) must NOT collapse onto the shared
+      // "undefined::undefined" key with other invalid rows — an empty key
+      // reads as "no download state" in EpisodeDownloadLive.
+      downloadKey={
+        episode.libraryItemId && episode.id
+          ? episodeDownloadKey(episode.libraryItemId, episode.id)
+          : ""
+      }
     >
       {({ epActiveDl, epDownloaded }) => {
     const coverUrl = getCoverUrl(episode.libraryItemId);

@@ -2655,7 +2655,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 </Text>
               ) : null}
               {displayEpisodes.slice(0, episodeLimit).map((episode) => (
-                <EpisodeDownloadLive key={episode.id} downloadKey={episodeDownloadKey(itemId, episode.id)}>
+                <EpisodeDownloadLive
+                  key={episode.id}
+                  // Empty key when the episode has no id — reads as "no
+                  // download state" instead of sharing "…::undefined".
+                  downloadKey={episode.id ? episodeDownloadKey(itemId, episode.id) : ""}
+                >
                 {({ epActiveDl, epDownloaded }) => {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
