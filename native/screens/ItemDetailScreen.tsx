@@ -2654,9 +2654,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   No episodes match this filter.
                 </Text>
               ) : null}
-              {displayEpisodes.slice(0, episodeLimit).map((episode) => (
+              {displayEpisodes.slice(0, episodeLimit).map((episode, epIdx) => (
                 <EpisodeDownloadLive
-                  key={episode.id}
+                  // Index fallback so a no-id episode still gets a stable list
+                  // key (mirrors LatestEpisodes' fallback key path).
+                  key={episode.id || `ep-${epIdx}`}
                   // Empty key when the episode has no id — reads as "no
                   // download state" instead of sharing "…::undefined".
                   downloadKey={episode.id ? episodeDownloadKey(itemId, episode.id) : ""}
