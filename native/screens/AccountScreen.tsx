@@ -56,8 +56,11 @@ function useModalA11y(visible: boolean, announcement: string) {
  */
 export default function AccountScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { user, serverConnectionConfig, logout, updateServerAddress, ereaderDevices } =
-    useUserStore();
+  const user = useUserStore((s) => s.user);
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
+  const logout = useUserStore((s) => s.logout);
+  const updateServerAddress = useUserStore((s) => s.updateServerAddress);
+  const ereaderDevices = useUserStore((s) => s.ereaderDevices);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const serverAddress = serverConnectionConfig?.address || "";

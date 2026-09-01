@@ -53,7 +53,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { authorId, authorName } = route.params || {};
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   // Same progress map the badge reads, so the card's spoken label can fold in
   // the badge's Finished / remaining / Downloaded state (BookCard pattern).
   const mediaProgress = useUserStore((s) => s.mediaProgress);

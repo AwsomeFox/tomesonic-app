@@ -76,7 +76,7 @@ function AuthorsScreen(
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { width } = useWindowDimensions();
   const { currentLibraryId } = useLibraryStore();
-  const { serverConnectionConfig } = useUserStore();
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const [authors, setAuthors] = useState<Author[]>([]);
