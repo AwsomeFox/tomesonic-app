@@ -121,13 +121,16 @@ class ChapterForwardingPlayer(player: Player) : ForwardingSimpleBasePlayer(playe
                 .setDisplayTitle(ch.title)
                 .setTrackNumber(i + 1)
                 .setTotalTrackCount(map.size)
-                // NO inline artwork bytes on windows: the real item may carry
-                // the LARGE cover bytes (single-item queue is allowed to), and
-                // inheriting them onto 100+ windows would rebuild the ~1MB
-                // Binder Timeline overflow the clipped queue once hit. The
-                // artworkUri survives and the session's bitmap loader resolves
-                // it once for every row/notification (same URI → one bitmap).
-                .setArtworkData(null, null)
+                // Inline artwork bytes ride ONLY the CURRENT window. The active
+                // item's LARGE artworkData tier is what out-of-process consumers
+                // actually render — the legacy session's now-playing bitmap is
+                // decoded from THIS item's bytes, and a URI-only metadata left
+                // Wear OS remote controls (and the Auto compact card) coverless
+                // for a downloaded single-file chaptered book. One window's
+                // bytes ≈ the pre-adapter active item; the ~1MB Binder Timeline
+                // overflow this strip guards against was N windows × bytes, so
+                // inactive windows stay byte-free (their artworkUri survives).
+                .apply { if (i != idx) setArtworkData(null, null) }
                 .build()
             SimpleBasePlayer.MediaItemData.Builder("abschap-$i")
                 .setMediaItem(
