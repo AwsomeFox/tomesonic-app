@@ -262,6 +262,16 @@ jest.mock("expo-screen-orientation", () => ({
   OrientationLock: { PORTRAIT_UP: 1, ALL: 0 },
 }));
 
+// App.tsx calls preventAutoHideAsync/setOptions at module scope (launch
+// splash gating) — any test importing App would otherwise hit the native
+// module.
+jest.mock("expo-splash-screen", () => ({
+  preventAutoHideAsync: jest.fn().mockResolvedValue(true),
+  hideAsync: jest.fn().mockResolvedValue(undefined),
+  hide: jest.fn(),
+  setOptions: jest.fn(),
+}));
+
 jest.mock("expo-web-browser", () => ({
   openBrowserAsync: jest.fn().mockResolvedValue({ type: "dismiss" }),
   openAuthSessionAsync: jest.fn().mockResolvedValue({ type: "dismiss" }),
