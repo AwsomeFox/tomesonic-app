@@ -110,7 +110,9 @@ jobs:
     name: e2e-sleep-timer
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Minutes of real background playback per scenario, plus Maestro's slow
+    # step settling around an animated player.
+    timeout-minutes: 60
     steps:
       - name: free disk space
         run: |
@@ -131,16 +133,19 @@ jobs:
       - name: seed media fixture (The Sleep Book)
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
-          # ONE m4b, ten 60s chapters, each [10s tone][40s SILENCE][10s tone]:
-          # with Skip silence on, a chapter's 60s of POSITION plays in ~22s of
-          # wall time — the gap that broke wall-clock end-of-chapter timers.
-          # Chapters END on tone, so "paused at the end" is a real boundary.
+          # ONE m4b, ten 180s chapters, each [40s tone][100s SILENCE][40s tone]:
+          # with Skip silence on, a chapter's 180s of POSITION plays in ~80s
+          # of wall time — the gap that broke wall-clock end-of-chapter
+          # timers — while staying long enough that Maestro's step latency
+          # can't play a chapter out before the device is asleep (run 1's
+          # 60s chapters lasted ~20s of wall time). Chapters END on tone, so
+          # "paused at the end" is a real boundary.
           mkdir -p "$PWD/e2e-media/Test Author/The Sleep Book"
           cd "$PWD/e2e-media/Test Author/The Sleep Book"
           ffmpeg -loglevel error \
-            -f lavfi -i "sine=frequency=440:duration=10" \
-            -f lavfi -i "anullsrc=r=44100:cl=mono:d=40" \
-            -f lavfi -i "sine=frequency=550:duration=10" \
+            -f lavfi -i "sine=frequency=440:duration=40" \
+            -f lavfi -i "anullsrc=r=44100:cl=mono:d=100" \
+            -f lavfi -i "sine=frequency=550:duration=40" \
             -filter_complex "[0][1][2]concat=n=3:v=0:a=1[a]" -map "[a]" chapter.wav
           {
             echo ";FFMETADATA1"
@@ -150,8 +155,8 @@ jobs:
             for i in $(seq 0 9); do
               echo "[CHAPTER]"
               echo "TIMEBASE=1/1000"
-              echo "START=$((i * 60000))"
-              echo "END=$(((i + 1) * 60000))"
+              echo "START=$((i * 180000))"
+              echo "END=$(((i + 1) * 180000))"
               echo "title=Chapter $((i + 1))"
             done
           } > meta.txt

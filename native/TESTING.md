@@ -107,11 +107,12 @@ off Android stalls RN's JS timers, so the store's 1s sleep interval stops and
 the Media3 service's native enforcer is what pauses — the UI can't show that,
 so every verdict comes from `dumpsys media_session` (state, position, current
 chapter window) sampled while the device is backgrounded / screen-off /
-force-idled. Fixture: "The Sleep Book" (ten 60s chapters of tone + 40s
-silence + tone) with Skip silence ON. Scenarios: fixed 1-minute timer after
-HOME; end of chapter in deep Doze; end of chapter + a headset NEXT with the
-screen off; stop after a picked chapter in deep Doze. The Maestro steps live
-in `.maestro/sleep/` (not part of `npm run e2e`).
+force-idled. Fixture: "The Sleep Book" (ten 180s chapters of 40s tone +
+100s silence + 40s tone) with Skip silence ON. Scenarios: fixed 1-minute timer
+after HOME; end of chapter in deep Doze; end of chapter + a headset NEXT with
+the screen off; stop after a picked chapter in deep Doze. A chapter scenario
+whose timer fired before the device was asleep is VOID (a failure), not a
+pass. The Maestro steps live in `.maestro/sleep/` (not part of `npm run e2e`).
 
 Locally (emulator with the release APK installed, ABS reachable at
 10.0.2.2:13378 with that book): `bash .maestro/ci-sleep-timer.sh`.

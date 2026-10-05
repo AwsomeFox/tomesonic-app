@@ -1,0 +1,16 @@
+# Sleep suite, last step: the JS side mirrored the final NATIVE pause
+# (abs-sleep-fired): paused, countdown chip gone. stopApp:false — Maestro's
+# launchApp kills the app by default, destroying the state under test.
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 20000
+- assertVisible: "Play"
+- assertNotVisible: "Sleep timer, .* remaining"
+- assertVisible: "Sleep timer"

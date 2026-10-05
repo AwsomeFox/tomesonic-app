@@ -12,19 +12,25 @@
 # position, and the current chapter window's title), sampled every 2s while
 # the device sits backgrounded / screen-off / in forced deep Doze.
 #
-# Fixture: "The Sleep Book" — one m4b, ten 60s chapters, each
-# [10s tone][40s SILENCE][10s tone]. Skip silence is ON (setup.yaml), so a
-# chapter plays in ~22s of wall time while its position covers 60s — the
-# condition that pushed the old wall-clock end-of-chapter deadline deep into
-# the following chapters.
+# Fixture: "The Sleep Book" — one m4b, ten 180s chapters, each
+# [40s tone][100s SILENCE][40s tone]. Skip silence is ON (setup.yaml), so a
+# chapter plays in ~80s of wall time while its position covers 180s — the
+# condition that pushed the old wall-clock end-of-chapter deadline more than a
+# chapter past its target. (Run 1 used 60s chapters ≈ 20s of wall time, and
+# Maestro's per-step latency let whole chapters play out before the device
+# ever went to sleep.)
 #
 # Scenarios (one session, in order):
 #   1. FIXED 1-minute timer, app backgrounded (HOME), screen on.
-#   2. END OF CHAPTER, screen off + deep Doze: pause at the end of Chapter 4.
+#   2. END OF CHAPTER, screen off + deep Doze.
 #   3. END OF CHAPTER + a headset NEXT while the screen is off: the timer
 #      follows the skip and pauses at the end of the chapter skipped INTO —
 #      not at the old chapter's deadline, and not instantly after the skip.
-#   4. STOP AFTER CHAPTER 9 (picked from Chapter 8), screen off + deep Doze.
+#   4. STOP AFTER CHAPTER 9 (picked in Chapter 8), screen off + deep Doze.
+#
+# A chapter scenario only counts when the device was ALREADY asleep and
+# playing at the first sample — a timer that fired in the foreground proves
+# nothing about the background, so that is a failure ("void"), never a pass.
 #
 # EVIDENCE GOES TO STDOUT (the repro rig's lesson): the action kills the
 # emulator the moment this script exits, so the samples and a filtered logcat
@@ -114,21 +120,36 @@ wake_device() {
 
 field() { echo "$1" | cut -d'|' -f"$2"; }
 
-# Verdict: playback is PAUSED at the end of chapter $2 — the chapter window is
-# $2 with the position inside its last 8s, or (overshoot tolerance) the very
-# start of $3 — and it never PLAYED on into $3 (two or more PLAYING samples in
-# it ≈ seconds of the next chapter, the old wall-clock failure).
+CHAPTER_MS=180000
+# "Chapter 7" -> "Chapter 8"
+next_chapter() { echo "Chapter $(( ${1#Chapter } + 1 ))"; }
+
+# The scenario is only meaningful if playback was still running when the
+# device went to sleep (first sample PLAYING).
+assert_started_asleep() {
+  local name="$1" first st
+  first=$(head -n 1 "$SAMPLES"); st=$(field "$first" 2)
+  if [ "$st" != "PLAYING" ]; then
+    echo "::error::[$name] VOID: already $st when the device went to sleep — the timer fired in the foreground, so this proves nothing about the background"
+    rc=1
+    return 1
+  fi
+}
+
+# Verdict: playback is PAUSED at the end of chapter $2 — that chapter's window
+# with the position inside its last 8s, or (overshoot tolerance) the very
+# start of the next one — and it never PLAYED on into the next chapter (two or
+# more PLAYING samples there ≈ seconds of it: the old wall-clock failure).
 assert_paused_at_chapter_end() {
-  local name="$1" chapter="$2" next="$3"
-  local last st pos desc played_on
+  local name="$1" chapter="$2" next last st pos desc played_on ok=1
+  next=$(next_chapter "$chapter")
   last=$(tail -n 1 "$SAMPLES")
   st=$(field "$last" 2); pos=$(field "$last" 3); desc=$(field "$last" 4)
   played_on=$(grep -c "|PLAYING|[0-9-]*|${next}\$" "$SAMPLES" || true)
-  echo "[$name] final: state=$st position=${pos}ms window='$desc' (PLAYING samples in '$next': $played_on)"
-  local ok=1
+  echo "[$name] expected the end of '$chapter'; final: state=$st position=${pos}ms window='$desc' (PLAYING samples in '$next': $played_on)"
   [ "$st" = "PAUSED" ] || { echo "::error::[$name] expected PAUSED, got $st"; ok=0; }
   if [ "$desc" = "$chapter" ]; then
-    [ "$pos" != "?" ] && [ "$pos" -ge 52000 ] ||
+    [ "$pos" != "?" ] && [ "$pos" -ge $((CHAPTER_MS - 8000)) ] ||
       { echo "::error::[$name] paused in '$chapter' but at ${pos}ms — not at its end"; ok=0; }
   elif [ "$desc" = "$next" ]; then
     [ "$pos" != "?" ] && [ "$pos" -le 1500 ] ||
@@ -139,14 +160,14 @@ assert_paused_at_chapter_end() {
   fi
   [ "${played_on:-0}" -lt 2 ] ||
     { echo "::error::[$name] kept PLAYING into '$next' ($played_on samples)"; ok=0; }
-  [ "$ok" -eq 1 ] && echo "[$name] PASS" || rc=1
+  if [ "$ok" -eq 1 ]; then echo "[$name] PASS"; else rc=1; fi
 }
 
-# Verdict for the fixed timer: the first PAUSED sample lands ~60s after arming
-# (the arm tap precedes $2 by the flow's collapse steps; sampling is 2s).
+# Verdict for the fixed timer: it pauses — and stays paused — within a minute
+# of arming. The arm tap PRECEDES $2 (the flow's return) by Maestro's step
+# latency, so the bound is "<= 62s after return", not "~60s".
 assert_fixed_paused() {
-  local name="$1" armed_at="$2"
-  local first_paused t elapsed last st
+  local name="$1" armed_at="$2" first_paused t elapsed last st
   first_paused=$(grep -m1 "|PAUSED|" "$SAMPLES" || true)
   last=$(tail -n 1 "$SAMPLES"); st=$(field "$last" 2)
   if [ -z "$first_paused" ]; then
@@ -157,12 +178,20 @@ assert_fixed_paused() {
   t=$(field "$first_paused" 1)
   elapsed=$((t - armed_at))
   echo "[$name] paused ${elapsed}s after the arm flow returned; final state $st"
-  if [ "$elapsed" -lt 40 ] || [ "$elapsed" -gt 80 ] || [ "$st" != "PAUSED" ]; then
-    echo "::error::[$name] expected a pause ~60s after arming that stays paused (got ${elapsed}s, final $st)"
+  if [ "$elapsed" -gt 62 ] || [ "$st" != "PAUSED" ]; then
+    echo "::error::[$name] expected a pause within a minute of arming that stays paused (got ${elapsed}s, final $st)"
+    rc=1
+  elif [ "$(field "$(head -n 1 "$SAMPLES")" 2)" != "PLAYING" ]; then
+    echo "::error::[$name] VOID: already paused when the app went to the background"
     rc=1
   else
     echo "[$name] PASS"
   fi
+}
+
+prepare() { # RESUME CHAPTER MODE TARGET
+  maestro test .maestro/sleep/prepare.yaml \
+    -e RESUME="$1" -e CHAPTER="$2" -e MODE="$3" -e TARGET="$4"
 }
 
 set -e
@@ -175,7 +204,7 @@ adb logcat -c || true
 set +e
 
 echo "########## 1. fixed 1-minute timer, app backgrounded (HOME) ##########"
-if maestro test .maestro/sleep/start.yaml && maestro test .maestro/sleep/arm-fixed.yaml; then
+if maestro test .maestro/sleep/start.yaml && prepare 0 none fixed none; then
   armed_at=$(date +%s)
   adb shell input keyevent KEYCODE_HOME
   sample_for 90
@@ -187,14 +216,15 @@ fi
 
 echo "########## 2. end of chapter, screen off + deep Doze ##########"
 wake_device
-if maestro test .maestro/sleep/resume.yaml &&
-  maestro test .maestro/sleep/jump.yaml -e CHAPTER="Chapter 4" &&
-  maestro test .maestro/sleep/arm-eoc.yaml; then
+if prepare 1 "Chapter 3" eoc none; then
   if sleep_device; then
-    # ~22s of wall time to the chapter end; 70s would carry the OLD
-    # wall-clock deadline (~59s) two chapters further.
-    sample_for 70
-    assert_paused_at_chapter_end "eoc-doze" "Chapter 4" "Chapter 5"
+    # The chapter playing at the first (asleep) sample is the one armed;
+    # at most ~80s of wall time to its end. 110s would carry the OLD
+    # wall-clock deadline more than a chapter further.
+    sample_for 110
+    if assert_started_asleep "eoc-doze"; then
+      assert_paused_at_chapter_end "eoc-doze" "$(field "$(head -n 1 "$SAMPLES")" 4)"
+    fi
   else
     rc=1
   fi
@@ -205,15 +235,23 @@ fi
 
 echo "########## 3. end of chapter + headset NEXT with the screen off ##########"
 wake_device
-if maestro test .maestro/sleep/resume.yaml &&
-  maestro test .maestro/sleep/jump.yaml -e CHAPTER="Chapter 6" &&
-  maestro test .maestro/sleep/arm-eoc.yaml; then
+if prepare 1 "Chapter 5" eoc none; then
   if sleep_device; then
-    # NEXT 6s in: Chapter 6 → Chapter 7. The timer must follow it to the END
-    # of Chapter 7 — not pause instantly after the skip (a target left behind
-    # at Chapter 6's end), and not run on to the old deadline.
-    sample_for 65 6 "adb shell input keyevent KEYCODE_MEDIA_NEXT"
-    assert_paused_at_chapter_end "eoc-remote-next" "Chapter 7" "Chapter 8"
+    # NEXT 8s in, dispatched to the media session like a headset button.
+    # The timer must follow the skip to the END of the chapter skipped
+    # into — not pause right after the skip (a target left behind at the
+    # old chapter's end), and not run on to the old deadline.
+    sample_for 120 8 "adb shell cmd media_session dispatch next || adb shell input keyevent KEYCODE_MEDIA_NEXT"
+    if assert_started_asleep "eoc-remote-next"; then
+      armed_in=$(field "$(head -n 1 "$SAMPLES")" 4)
+      skipped_to=$(next_chapter "$armed_in")
+      if grep -q "|${skipped_to}\$" "$SAMPLES"; then
+        assert_paused_at_chapter_end "eoc-remote-next" "$skipped_to"
+      else
+        echo "::error::[eoc-remote-next] the NEXT key never moved playback off '$armed_in' — the scenario couldn't run"
+        rc=1
+      fi
+    fi
   else
     rc=1
   fi
@@ -224,18 +262,17 @@ fi
 
 echo "########## 4. stop after Chapter 9 (picked in Chapter 8), screen off + deep Doze ##########"
 wake_device
-if maestro test .maestro/sleep/resume.yaml &&
-  maestro test .maestro/sleep/jump.yaml -e CHAPTER="Chapter 8" &&
-  maestro test .maestro/sleep/arm-until.yaml -e TARGET="Chapter 9"; then
+if prepare 1 "Chapter 8" until "Chapter 9"; then
   if sleep_device; then
-    # ~44s of wall time across two chapters — and the Chapter 8 → 9 boundary
-    # on the way must NOT pause.
-    sample_for 80
-    assert_paused_at_chapter_end "stop-after-chapter" "Chapter 9" "Chapter 10"
-    passed_8=$(grep -c "|PAUSED|[0-9-]*|Chapter 8\$" "$SAMPLES" || true)
-    if [ "${passed_8:-0}" -gt 0 ]; then
-      echo "::error::[stop-after-chapter] paused at the end of Chapter 8 — the picked target is Chapter 9"
-      rc=1
+    # Up to ~80s left of Chapter 8 plus ~80s of Chapter 9 — and the
+    # Chapter 8 → 9 boundary on the way must NOT pause.
+    sample_for 180
+    if assert_started_asleep "stop-after-chapter"; then
+      assert_paused_at_chapter_end "stop-after-chapter" "Chapter 9"
+      if grep -q "|PAUSED|[0-9-]*|Chapter 8\$" "$SAMPLES"; then
+        echo "::error::[stop-after-chapter] paused in Chapter 8 — the picked target is Chapter 9"
+        rc=1
+      fi
     fi
   else
     rc=1
@@ -247,7 +284,7 @@ fi
 
 wake_device
 # The JS side mirrored the last native pause (chip gone, paused).
-maestro test .maestro/sleep/resume.yaml || rc=$?
+maestro test .maestro/sleep/verify-paused.yaml || rc=1
 
 echo "==================== sleep-timer evidence (exit $rc) ===================="
 echo "-------------------- all media-session samples --------------------"
