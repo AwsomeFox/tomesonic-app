@@ -15,6 +15,14 @@ internal fun absAccessToken(user: JSONObject?): String? =
     absStr(user, "accessToken") ?: absStr(user, "token")
 
 /**
+ * Sent with `/login`: ABS (≥ 2.26) returns the REFRESH token in the body only
+ * when asked — otherwise it sets an httpOnly cookie this client never reads,
+ * the login carries no refresh token, and the session dies when the 1-hour
+ * access token expires (the phone's ConnectScreen sends the same header).
+ */
+internal val LOGIN_HEADERS: Map<String, String> = mapOf("x-return-tokens" to "true")
+
+/**
  * What a watch login attempt answered — the CASE, never the sentence. The
  * strings a user reads live in the UI layer (ui/WatchLogin.kt) with the rest of
  * the copy; this type exists so the mapping is one `when` instead of a decision
@@ -79,7 +87,8 @@ class AbsApi(
         val response = client.postBare(
             normalized + AbsClient.LOGIN_PATH,
             body,
-            AbsClient.LOGIN_TIMEOUT_SECONDS
+            AbsClient.LOGIN_TIMEOUT_SECONDS,
+            LOGIN_HEADERS
         )
         return parseLogin(normalized, response.code, response.body)
     }

@@ -232,7 +232,13 @@ describe("ConnectScreen", () => {
       expect(mockedPost).toHaveBeenCalledWith(
         "https://abs.example.com/login",
         { username: "bob", password: "hunter2" },
-        expect.objectContaining({ timeout: 15000 })
+        expect.objectContaining({
+          timeout: 15000,
+          // Without it ABS ≥ 2.26 keeps the refresh token in a cookie, the
+          // body's refreshToken is null, and the session dies with the
+          // 1-hour access token ("logged out after losing connection").
+          headers: expect.objectContaining({ "x-return-tokens": "true" }),
+        })
       )
     );
     await waitFor(() =>

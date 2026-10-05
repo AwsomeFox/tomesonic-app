@@ -1,6 +1,6 @@
 import axios from "axios";
 import * as FileSystem from "expo-file-system/legacy";
-import { api } from "../../utils/api";
+import { api, recoverSessionIfNeeded, __resetSessionRecoveryForTests } from "../../utils/api";
 import { storageHelper, secureStorage } from "../../utils/storage";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -21,17 +21,26 @@ const make401 = (url = "/api/items", extra: any = {}) => {
 };
 
 let postSpy: jest.SpyInstance;
+let getSpy: jest.SpyInstance;
 
 beforeEach(() => {
   secureStorage.getAllKeys().forEach((k) => secureStorage.remove(k));
   useUserStore.setState(initialUserState, true);
   (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });
   (FileSystem.writeAsStringAsync as jest.Mock).mockResolvedValue(undefined);
-  postSpy = jest.spyOn(axios, "post");
+  // Never real network: an un-stubbed refresh is ABS rejecting the token…
+  postSpy = jest
+    .spyOn(axios, "post")
+    .mockRejectedValue({ response: { status: 401 }, message: "default: ABS rejects" });
+  // …and the server answers /ping as ABS (the rejection is ABS's verdict).
+  getSpy = jest.spyOn(axios, "get").mockResolvedValue({ status: 200, data: { success: true } });
 });
 
 afterEach(() => {
   postSpy.mockRestore();
+  getSpy.mockRestore();
+  __resetSessionRecoveryForTests();
+  jest.useRealTimers();
 });
 
 describe("request interceptor", () => {
@@ -105,14 +114,18 @@ describe("response interceptor", () => {
     });
   });
 
-  it("forces logout when there is no refresh token anywhere", async () => {
+  it("no refresh token anywhere: tries the COOKIE refresh, logs out only when ABS rejects it", async () => {
     storageHelper.setServerConfig({ address: "http://abs.local", token: "t" }); // no refreshToken
     useUserStore.setState({ user: { id: "u1" } } as any);
 
-    const err = make401();
-    await expect(responseHandler.rejected(err)).rejects.toBe(err);
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
 
-    expect(postSpy).not.toHaveBeenCalled();
+    // Cookie mode: no x-refresh-token header, the jar's refresh_token cookie.
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(postSpy.mock.calls[0][0]).toBe("http://abs.local/auth/refresh");
+    expect(postSpy.mock.calls[0][2].headers["x-refresh-token"]).toBeUndefined();
+    expect(postSpy.mock.calls[0][2].withCredentials).toBe(true);
+    expect(getSpy).toHaveBeenCalledWith("http://abs.local/ping", expect.anything());
     expect(useUserStore.getState().user).toBeNull();
     expect(storageHelper.getServerConfig()).toBeNull();
   });
@@ -671,5 +684,135 @@ describe("response interceptor", () => {
 
     await expect(p1).rejects.toBe(refreshErr);
     await expect(p2).rejects.toBe(refreshErr);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Logged out when the connection to the server drops" — the session must
+// survive anything that isn't ABS itself rejecting the refresh token.
+// ---------------------------------------------------------------------------
+describe("session survival", () => {
+  const user = { id: "u1" };
+
+  it("renews a session that has NO refresh token through the login cookie (pre-fix logins)", async () => {
+    // Every username/password login before x-return-tokens: ABS kept the
+    // refresh token in an httpOnly cookie, the app stored none, and the first
+    // 401 after the 1-hour access token expired forced a logout.
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "expired" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockResolvedValue({
+      status: 200,
+      data: { user: { accessToken: "fresh", refreshToken: null } },
+    });
+
+    const res = await responseHandler.rejected(make401());
+    expect(res.data).toBe("retried-ok");
+    expect(postSpy.mock.calls[0][2].headers["x-refresh-token"]).toBeUndefined();
+    expect(storageHelper.getServerConfig()).toMatchObject({ token: "fresh", refreshToken: null });
+    expect(useUserStore.getState().user).toEqual(user);
+  });
+
+  it("a 401 that ISN'T ABS talking (captive portal / firewall / challenge page) keeps the session", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockRejectedValue({ response: { status: 403 }, message: "blocked by proxy" });
+    // /ping isn't ABS's `{ success: true }` either — some HTML page.
+    getSpy.mockResolvedValue({ status: 200, data: "<html>Access denied</html>" });
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    expect(useUserStore.getState().user).toEqual(user);
+    expect(storageHelper.getServerConfig()).toMatchObject({ refreshToken: "r1" });
+  });
+
+  it("…and so does one while /ping can't be reached at all", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    useUserStore.setState({ user } as any);
+    getSpy.mockRejectedValue({ message: "Network Error" });
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    expect(useUserStore.getState().user).toEqual(user);
+  });
+
+  it("cookie mode against a pre-2.26 server (no /auth/refresh → 404) is a dead legacy token", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "legacy" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockRejectedValue({ response: { status: 404 }, message: "Not Found" });
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    expect(useUserStore.getState().user).toBeNull();
+  });
+
+  it("…but a 404 from something that isn't ABS (proxy with the upstream down) is not", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "legacy" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockRejectedValue({ response: { status: 404 }, message: "page not found" });
+    getSpy.mockResolvedValue({ status: 404, data: "404 page not found" });
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    expect(useUserStore.getState().user).toEqual(user);
+  });
+
+  it("a LOST rotation answer is recovered inside ABS's grace window by the retry ladder", async () => {
+    jest.useFakeTimers();
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    useUserStore.setState({ user } as any);
+    // The refresh reached ABS (which rotated the pair) but the answer never
+    // came back — from here the app holds only the PREVIOUS refresh token.
+    postSpy.mockRejectedValueOnce({ message: "timeout of 20000ms exceeded" });
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    expect(useUserStore.getState().user).toEqual(user);
+
+    // ABS answers the previous token inside its grace window with the
+    // CURRENT pair — the first rung (15s) re-runs the refresh with it.
+    postSpy.mockResolvedValueOnce({
+      status: 200,
+      data: { user: { accessToken: "a2", refreshToken: "r2-current" } },
+    });
+    await jest.advanceTimersByTimeAsync(15_000);
+
+    expect(postSpy).toHaveBeenCalledTimes(2);
+    expect(postSpy.mock.calls[1][2].headers["x-refresh-token"]).toBe("r1");
+    expect(storageHelper.getServerConfig()).toMatchObject({ token: "a2", refreshToken: "r2-current" });
+  });
+
+  it("the ladder keeps retrying while the link stays down, then stops", async () => {
+    jest.useFakeTimers();
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockRejectedValue({ message: "Network Error" });
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+
+    // 15s, 60s, 3m, 7m rungs — then the ladder is spent.
+    await jest.advanceTimersByTimeAsync(15_000 + 60_000 + 180_000 + 420_000 + 60_000 * 30);
+    expect(postSpy).toHaveBeenCalledTimes(1 + 4);
+    expect(useUserStore.getState().user).toEqual(user);
+  });
+
+  it("foreground / connectivity-regained finish an unresolved refresh (JS timers stall in background)", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    useUserStore.setState({ user } as any);
+    postSpy.mockRejectedValueOnce({ message: "Network Error" });
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+
+    postSpy.mockResolvedValueOnce({
+      status: 200,
+      data: { user: { accessToken: "a2", refreshToken: "r2" } },
+    });
+    await expect(recoverSessionIfNeeded("foreground")).resolves.toBe(true);
+    expect(storageHelper.getServerConfig()).toMatchObject({ token: "a2", refreshToken: "r2" });
+    // Nothing pending any more.
+    await expect(recoverSessionIfNeeded("foreground")).resolves.toBe(false);
+  });
+
+  it("recovery is a no-op with nothing pending, and after a logout", async () => {
+    await expect(recoverSessionIfNeeded("foreground")).resolves.toBe(false);
+    expect(postSpy).not.toHaveBeenCalled();
+
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t", refreshToken: "r1" });
+    postSpy.mockRejectedValueOnce({ message: "Network Error" });
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+    storageHelper.clearServerConfig(); // user logged out meanwhile
+    await expect(recoverSessionIfNeeded("connectivity")).resolves.toBe(false);
+    expect(postSpy).toHaveBeenCalledTimes(1);
   });
 });

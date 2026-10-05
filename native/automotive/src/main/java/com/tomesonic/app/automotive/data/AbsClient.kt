@@ -365,8 +365,13 @@ class AbsClient(
     }
 
     /** [postBareSync] from a coroutine — the login path. */
-    internal suspend fun postBare(url: String, body: JSONObject, timeoutSeconds: Long): BareResponse =
-        withContext(Dispatchers.IO) { postBareSync(url, body, timeoutSeconds) }
+    internal suspend fun postBare(
+        url: String,
+        body: JSONObject,
+        timeoutSeconds: Long,
+        headers: Map<String, String> = emptyMap()
+    ): BareResponse =
+        withContext(Dispatchers.IO) { postBareSync(url, body, timeoutSeconds, headers) }
 
     suspend fun get(path: String): String? = execute("GET", path, null)
 

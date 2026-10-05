@@ -143,4 +143,12 @@ class LoginParsingTest {
         assertEquals(LoginResult.BadCredentials, AbsApi.parseLogin(server, 400, null))
         assertEquals(LoginResult.BadCredentials, AbsApi.parseLogin(server, 404, null))
     }
+
+    @Test
+    fun loginAsksForTheRefreshTokenInTheBody() {
+        // Without this header ABS keeps the refresh token in a cookie and the
+        // body's refreshToken is null — the session can't outlive the 1-hour
+        // access token.
+        assertEquals("true", LOGIN_HEADERS["x-return-tokens"])
+    }
 }

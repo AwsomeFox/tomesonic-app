@@ -312,7 +312,17 @@ export default function ConnectScreen() {
       const response = await axios.post(
         `${address.replace(/\/+$/, "")}/login`,
         { username: username.trim(), password },
-        { headers: { "Content-Type": "application/json" }, timeout: 15000 }
+        {
+          headers: {
+            "Content-Type": "application/json",
+            // ABS (≥ 2.26) only puts the REFRESH token in the body when asked —
+            // otherwise it's an httpOnly cookie, the app stored no refresh
+            // token, and the session "logged out" the first time the 1-hour
+            // access token expired (typically noticed after a stretch offline).
+            "x-return-tokens": "true",
+          },
+          timeout: 15000,
+        }
       );
 
       const user = response.data?.user;
