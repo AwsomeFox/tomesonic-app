@@ -59,7 +59,7 @@ Your progress stays synchronized across all devices:
 - Ebook reading progress synced alongside audio
 
 ### ⚙️ Advanced Playback Features
-- Sleep timer (fixed or end-of-chapter) with fade-out
+- Sleep timer (fixed, end of chapter, or stop after a chosen chapter) with fade-out — enforced natively, so it works with the screen off
 - Variable playback speeds
 - Background playback with notification controls
 - Ebook reader for EPUB/PDF with progress sync

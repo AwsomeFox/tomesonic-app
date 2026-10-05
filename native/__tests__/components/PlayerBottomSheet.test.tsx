@@ -518,6 +518,16 @@ describe("PlayerBottomSheet — sleep timer", () => {
     expect(store().setSleepTimer).toHaveBeenCalledWith(500, true);
   });
 
+  it("Stop after chapter… arms the PICKED chapter (store: setSleepTimer(0, true, index))", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Sleep timer")[0]);
+    await fireEvent.press(screen.getByText("Stop after chapter…"));
+    const later = screen.getAllByLabelText(/^Stop after /).at(-1)!;
+    await fireEvent.press(later);
+    expect(store().setSleepTimer).toHaveBeenCalledWith(0, true, chapters.length - 1);
+  });
+
   it("preset selection arms a fixed timer", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);

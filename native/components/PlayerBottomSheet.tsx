@@ -478,12 +478,32 @@ function LiveBookmarksModal(
  * object every second while armed, and the modal shows it live only while
  * open — closed, the selector returns a constant null and never re-renders.
  */
+const NO_CHAPTERS: any[] = [];
 function LiveSleepTimerModal(
-  props: Omit<React.ComponentProps<typeof SleepTimerModal>, "timer">
+  props: Omit<
+    React.ComponentProps<typeof SleepTimerModal>,
+    "timer" | "chapters" | "currentChapterIndex" | "playbackSpeed" | "getPosition"
+  >
 ) {
   const timer = usePlaybackStore((s) => (props.visible ? s.sleepTimer : null));
-  return <SleepTimerModal {...props} timer={timer} />;
+  // The stop-after-chapter picker's inputs — subscribed only while open, like
+  // the timer (chapters/index/speed change rarely; position is read one-shot
+  // when the picker renders, never subscribed).
+  const chapters = usePlaybackStore((s) => (props.visible ? s.chapters : NO_CHAPTERS));
+  const currentChapterIndex = usePlaybackStore((s) => (props.visible ? s.currentChapterIndex : -1));
+  const playbackSpeed = usePlaybackStore((s) => (props.visible ? s.playbackSpeed : 1));
+  return (
+    <SleepTimerModal
+      {...props}
+      timer={timer}
+      chapters={chapters}
+      currentChapterIndex={currentChapterIndex}
+      playbackSpeed={playbackSpeed}
+      getPosition={getSnapshotPosition}
+    />
+  );
 }
+const getSnapshotPosition = () => usePlaybackStore.getState().position;
 
 // Consolidated bottom pill: [speed][Sleep][Bookmark]. Hoisted (like
 // CircleButton) so it keeps a stable component identity across the ~1s
@@ -2116,6 +2136,7 @@ export default function PlayerBottomSheet() {
             setSleepTimer(seconds, false);
           }
         }}
+        onSetUntilChapter={(chapterIndex) => setSleepTimer(0, true, chapterIndex)}
         onCancel={cancelSleepTimer}
         rewindOnWake={sleepRewindOnWake}
         onToggleRewindOnWake={setSleepRewindOnWake}
