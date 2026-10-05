@@ -19,8 +19,14 @@ import { useThemeStore } from "./store/useThemeStore";
 import { useThemeColors } from "./theme/useThemeColors";
 import { DynamicThemeProvider } from "./theme/DynamicThemeContext";
 import { useDownloadStore } from "./store/useDownloadStore";
-import { usePlaybackStore, recoverPlaybackIfNeeded, reconcileWithNativePlayer } from "./store/usePlaybackStore";
+import {
+  usePlaybackStore,
+  recoverPlaybackIfNeeded,
+  reconcileWithNativePlayer,
+  reconcileNativeSleepTimer,
+} from "./store/usePlaybackStore";
 import { flushPendingSyncs } from "./utils/progressSync";
+import { recoverSessionIfNeeded } from "./utils/api";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { handleWidgetUrl } from "./utils/widgetLaunch";
 import { installHomeRowsMirror } from "./utils/homeRowsMirror";
@@ -103,6 +109,9 @@ export default function App() {
   // throttled in the background — connectivity return is the reliable signal).
   useEffect(() => {
     if (isConnected) {
+      // Finish a token refresh that ended without a verdict while the link
+      // was down — inside ABS's grace window that still saves the session.
+      recoverSessionIfNeeded("connectivity").catch(() => {});
       flushPendingSyncs().catch(() => {});
       recoverPlaybackIfNeeded("connectivity").catch(() => {});
     }
@@ -129,12 +138,16 @@ export default function App() {
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
+        recoverSessionIfNeeded("foreground").catch(() => {});
         flushPendingSyncs().catch(() => {});
         recoverPlaybackIfNeeded("foreground").catch(() => {});
         // Sync the UI with a session Android Auto may have started (or resumed)
         // while the app was backgrounded/killed, so the progress bars reflect
         // the live position instead of sitting frozen.
         reconcileWithNativePlayer().catch(() => {});
+        // Re-arm a native sleep timer the playback service lost (e.g. torn
+        // down and rebuilt while paused) under a still-running JS countdown.
+        reconcileNativeSleepTimer().catch(() => {});
       }
     });
     return () => sub.remove();

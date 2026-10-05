@@ -1,0 +1,28 @@
+# BACKGROUND SLEEP-TIMER SUITE (ci-sleep-timer.sh), setup: turn "Skip silence"
+# ON. It's the harshest condition for a chapter timer — the player's position
+# outruns the wall clock across every silent stretch, which is exactly what
+# broke the old wall-clock end-of-chapter enforcement (it fired late, deep in
+# the next chapter). A row tap toggles; in CI this lands ON deterministically
+# because 10-login just launched with cleared state (default OFF).
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Account menu"
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: ".*Settings.*"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: "Skip silence"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Skip silence"
+- back
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 10000

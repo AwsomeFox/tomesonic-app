@@ -1,0 +1,85 @@
+# Sleep suite: ONE Maestro invocation per scenario (each `maestro test` adds
+# ~10-15s of startup/teardown, and the player UI's constant animation makes
+# every step wait to settle — run 1 lost whole chapters to that latency).
+#
+#   RESUME=1   bring the app back after the previous scenario and check the JS
+#              side mirrored the NATIVE pause (paused, countdown chip gone),
+#              then play again.
+#   CHAPTER    "Chapter N" to jump to (its start, absolute — resume's rewinds
+#              make the resume point approximate), or "none".
+#   MODE       fixed (1-minute Custom timer) | eoc (End of chapter) |
+#              until (Stop after chapter… TARGET)
+#   TARGET     "Chapter N" for MODE=until, else "none".
+#
+# Every variable is passed with -e on every run: NO env defaults here, because
+# Maestro applies a flow's env defaults OVER -e overrides.
+appId: com.tomesonic.app
+---
+- runFlow:
+    when:
+      true: ${RESUME == "1"}
+    commands:
+      - launchApp:
+          stopApp: false
+      - tapOn:
+          text: "Expand player.*"
+          optional: true
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 20000
+      - assertVisible: "Play"
+      - assertNotVisible: "Sleep timer, .* remaining"
+      - assertVisible: "Sleep timer"
+      - tapOn: "Play"
+      - extendedWaitUntil:
+          visible: "Pause"
+          timeout: 15000
+- runFlow:
+    when:
+      true: ${CHAPTER != "none"}
+    commands:
+      - tapOn: "Chapters and Up Next"
+      - scrollUntilVisible:
+          element:
+            text: "${CHAPTER}, starts at .*"
+          direction: DOWN
+          timeout: 15000
+      - tapOn: "${CHAPTER}, starts at .*"
+      - extendedWaitUntil:
+          visible: "${CHAPTER} of 10"
+          timeout: 10000
+- tapOn: "Sleep timer"
+- runFlow:
+    when:
+      true: ${MODE == "fixed"}
+    commands:
+      - tapOn: "Custom"
+      - extendedWaitUntil:
+          visible: "Decrease minutes"
+          timeout: 5000
+      - repeat:
+          times: 14
+          commands:
+            - tapOn: "Decrease minutes"
+      - assertVisible: "1 min"
+      - tapOn: "Set Timer"
+- runFlow:
+    when:
+      true: ${MODE == "eoc"}
+    commands:
+      - tapOn: "End of chapter"
+- runFlow:
+    when:
+      true: ${MODE == "until"}
+    commands:
+      - tapOn: "Stop after chapter.*"
+      - scrollUntilVisible:
+          element:
+            text: "Stop after ${TARGET}, ends in .*"
+          direction: DOWN
+          timeout: 10000
+      - tapOn: "Stop after ${TARGET}, ends in .*"
+- extendedWaitUntil:
+    visible: "Sleep timer, .* remaining"
+    timeout: 5000
+- tapOn: "Collapse player"

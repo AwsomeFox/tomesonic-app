@@ -222,8 +222,14 @@ jobs:
 
       - name: capture device logcat
         if: always()
+        # `timeout`: the emulator is gone once the runner step exits, and adb
+        # against a dead device BLOCKS instead of failing — every nightly run
+        # sat here until the 60-minute job timeout CANCELLED the job, so the
+        # doze verdict and its artifacts never reported (same fix as the
+        # repro rig's capture step).
+        timeout-minutes: 3
         run: |
-          adb -s emulator-5554 logcat -d > $HOME/full-logcat.txt || true
+          timeout 90 adb -s emulator-5554 logcat -d > $HOME/full-logcat.txt || true
           grep -iE "CONSOLE|ReactNativeJS|AndroidRuntime|FATAL|deviceidle|SleepTimer|doze" \
             $HOME/full-logcat.txt > $HOME/logcat-console.txt || true
           wc -l $HOME/full-logcat.txt $HOME/logcat-console.txt || true

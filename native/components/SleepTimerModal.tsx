@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text } from "react-native";
+import { View, Text, FlatList } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
@@ -7,6 +7,13 @@ import Pressable from "./HintPressable";
 import type { SleepTimerState } from "../store/usePlaybackStore";
 
 const TIMEOUTS = [5, 10, 15, 30, 45, 60];
+
+/** The chapter fields the stop-after-chapter picker reads. */
+export interface SleepChapter {
+  title?: string;
+  start: number;
+  end: number;
+}
 
 interface Props {
   visible: boolean;
@@ -17,6 +24,17 @@ interface Props {
   hasChapter: boolean;
   onSet: (seconds: number, endOfChapter?: boolean) => void;
   onCancel: () => void;
+  /**
+   * Stop-after-chapter: the book's chapters + where playback is, and the
+   * handler that arms a timer for the end of a picked chapter. The picker row
+   * only appears when the book has a later chapter to pick.
+   */
+  chapters?: SleepChapter[];
+  currentChapterIndex?: number;
+  /** One-shot read of the live book position (seconds) when the picker opens. */
+  getPosition?: () => number;
+  playbackSpeed?: number;
+  onSetUntilChapter?: (chapterIndex: number) => void;
   /** "Rewind on wake" toggle (omit both to hide the row). */
   rewindOnWake?: boolean;
   onToggleRewindOnWake?: (value: boolean) => void;
@@ -78,6 +96,10 @@ function ToggleRow({
   );
 }
 
+function chapterTitle(ch: SleepChapter | undefined, index: number) {
+  return ch?.title?.trim() || `Chapter ${index + 1}`;
+}
+
 function fmt(seconds: number) {
   const s = Math.max(0, Math.round(seconds));
   const h = Math.floor(s / 3600);
@@ -89,8 +111,9 @@ function fmt(seconds: number) {
 
 /**
  * Sleep timer bottom sheet. Mirrors the original SleepTimerModal.vue: preset
- * durations, End of chapter, and a Custom stepper. When a timer is active it
- * shows the remaining time with a cancel button.
+ * durations, End of chapter, and a Custom stepper — plus "Stop after
+ * chapter…", which picks a LATER chapter to stop at. When a timer is active
+ * it shows the remaining time with a cancel button.
  */
 export default function SleepTimerModal({
   visible,
@@ -103,15 +126,30 @@ export default function SleepTimerModal({
   onToggleRewindOnWake,
   shakeToExtend,
   onToggleShakeToExtend,
+  chapters,
+  currentChapterIndex = -1,
+  getPosition,
+  playbackSpeed = 1,
+  onSetUntilChapter,
 }: Props) {
   const colors = useThemeColors();
   const [customMode, setCustomMode] = useState(false);
   const [customMin, setCustomMin] = useState(15);
+  const [chapterMode, setChapterMode] = useState(false);
 
-  // Reset the custom sub-view whenever the sheet is reopened.
+  // Reset the sub-views whenever the sheet is reopened.
   useEffect(() => {
-    if (visible) setCustomMode(false);
+    if (visible) {
+      setCustomMode(false);
+      setChapterMode(false);
+    }
   }, [visible]);
+
+  // A later chapter must exist for "stop after…" to mean more than the plain
+  // End of chapter row.
+  const firstPickable = Math.max(0, currentChapterIndex);
+  const canPickChapter =
+    !!onSetUntilChapter && hasChapter && !!chapters && chapters.length > firstPickable + 1;
 
   const rowStyle = {
     paddingVertical: 14,
@@ -139,8 +177,13 @@ export default function SleepTimerModal({
             {fmt(timer.remaining)}
           </Text>
           {timer.endOfChapter ? (
-            <Text style={{ fontSize: 14, color: colors.onSurfaceVariant, textAlign: "center", marginBottom: 16 }}>
-              End of chapter
+            <Text
+              numberOfLines={2}
+              style={{ fontSize: 14, color: colors.onSurfaceVariant, textAlign: "center", marginBottom: 16 }}
+            >
+              {timer.untilChapter && timer.chapterIdx != null
+                ? `End of ${chapterTitle(chapters?.[timer.chapterIdx], timer.chapterIdx)}`
+                : "End of chapter"}
             </Text>
           ) : null}
           <View style={{ flexDirection: "row", justifyContent: "center", gap: 12, marginBottom: 16 }}>
@@ -174,6 +217,75 @@ export default function SleepTimerModal({
           >
             <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Cancel Timer</Text>
           </Pressable>
+        </View>
+      );
+    }
+
+    // Stop-after-chapter picker: the current chapter onward, each with how
+    // long until it ends (listening time at the current speed).
+    if (chapterMode && canPickChapter && chapters) {
+      const position = getPosition ? getPosition() : chapters[firstPickable]?.start || 0;
+      const rate = playbackSpeed > 0 ? playbackSpeed : 1;
+      const rows = chapters.slice(firstPickable).map((ch, i) => {
+        const index = firstPickable + i;
+        return {
+          index,
+          title: chapterTitle(ch, index),
+          endsIn: Math.max(0, ((ch.end || 0) - position) / rate),
+          isCurrent: index === currentChapterIndex,
+        };
+      });
+      return (
+        <View style={{ paddingHorizontal: 8, paddingBottom: 16 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, marginBottom: 4 }}>
+            <Pressable
+              onPress={() => setChapterMode(false)}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Back to presets"
+              style={{ padding: 4, marginRight: 8 }}
+            >
+              <Icon name="back" size={26} color={colors.onSurface} />
+            </Pressable>
+            <Text accessibilityRole="header" style={{ fontSize: 16, fontWeight: "500", color: colors.onSurface }}>
+              Stop after chapter
+            </Text>
+          </View>
+          <FlatList
+            data={rows}
+            keyExtractor={(r) => String(r.index)}
+            style={{ maxHeight: 380 }}
+            initialNumToRender={12}
+            renderItem={({ item }) => (
+              <Pressable
+                onPress={() => {
+                  onSetUntilChapter!(item.index);
+                  onClose();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Stop after ${item.title}, ends in ${fmt(item.endsIn)}`}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingHorizontal: 16,
+                  paddingVertical: 14,
+                  borderRadius: 16,
+                }}
+              >
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 16, color: colors.onSurface }}>
+                    {item.title}
+                  </Text>
+                  {item.isCurrent ? (
+                    <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2 }}>Playing now</Text>
+                  ) : null}
+                </View>
+                <Text style={{ fontSize: 14, color: colors.onSurfaceVariant, fontVariant: ["tabular-nums"] }}>
+                  {fmt(item.endsIn)}
+                </Text>
+              </Pressable>
+            )}
+          />
         </View>
       );
     }
@@ -256,6 +368,11 @@ export default function SleepTimerModal({
             style={rowStyle}
           >
             <Text style={{ fontSize: 18, color: colors.onSurface }}>End of chapter</Text>
+          </Pressable>
+        ) : null}
+        {canPickChapter ? (
+          <Pressable onPress={() => setChapterMode(true)} {...rowA11y} style={rowStyle}>
+            <Text style={{ fontSize: 18, color: colors.onSurface }}>Stop after chapter…</Text>
           </Pressable>
         ) : null}
         <Pressable onPress={() => setCustomMode(true)} {...rowA11y} style={rowStyle}>

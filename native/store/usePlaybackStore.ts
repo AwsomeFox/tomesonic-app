@@ -310,6 +310,10 @@ let _nativeSleepArmed = false;
 // which is when both countdowns actually run.
 let _nativeSleepArmedRemaining = 0;
 let _nativeSleepArmedAt = 0;
+// True when the armed native timer is in POSITION-TARGET mode (a chapter end
+// judged on the player's own position — absSetSleepTimerAt). Only the legacy
+// wall-clock arm needs the EOC tick's drift check below.
+let _nativeSleepPositionMode = false;
 function nativeSleepModule(): any | null {
   try {
     const RN = require("react-native");
@@ -353,6 +357,7 @@ function armNativeSleepTimer(seconds: number): boolean {
   if (!m || !Number.isFinite(seconds) || seconds <= 0) return false;
   const shakeSecs = getSleepShakeToExtend() ? SLEEP_SHAKE_MINUTES * 60 : 0;
   _nativeSleepArmed = true;
+  _nativeSleepPositionMode = false;
   _nativeSleepArmedRemaining = seconds;
   _nativeSleepArmedAt = Date.now();
   m.absSetSleepTimer(seconds, SLEEP_FADE_SECONDS, shakeSecs).catch(() => {
@@ -368,8 +373,196 @@ function armNativeSleepTimer(seconds: number): boolean {
 function cancelNativeSleepTimer() {
   if (!_nativeSleepArmed) return;
   _nativeSleepArmed = false;
+  _nativeSleepPositionMode = false;
   try {
     nativeSleepModule()?.absCancelSleepTimer?.().catch(() => {});
+  } catch {}
+}
+
+/**
+ * Maps an ABSOLUTE book position (seconds) into the native player's own
+ * timeline — (queue item index, ms into that item) — for the queue shape the
+ * session was built with: one clipped item per chapter, one item per file, or
+ * a single flat item. END-INCLUSIVE: a position exactly on an item boundary
+ * maps to the END of the item before it, so a chapter end that coincides with
+ * a file/clip end is reached in the item being listened to, not at "0ms into
+ * the next one" (which the player only enters after the boundary has passed).
+ */
+export function nativeSleepTargetFor(
+  absSeconds: number,
+  shape: { chapterQueue: boolean; chapters: any[]; trackOffsets: number[] }
+): { index: number; positionMs: number } | null {
+  if (!Number.isFinite(absSeconds) || absSeconds < 0) return null;
+  const { chapterQueue, chapters, trackOffsets } = shape;
+  if (chapterQueue && chapters?.length) {
+    let idx = chapters.findIndex(
+      (c: any) => absSeconds > (c.start || 0) && absSeconds <= (c.end || 0)
+    );
+    if (idx < 0) idx = absSeconds <= (chapters[0]?.start || 0) ? 0 : chapters.length - 1;
+    return {
+      index: idx,
+      positionMs: Math.max(0, Math.round((absSeconds - (chapters[idx].start || 0)) * 1000)),
+    };
+  }
+  if (trackOffsets?.length > 1) {
+    let idx = 0;
+    for (let i = trackOffsets.length - 1; i >= 0; i--) {
+      if (absSeconds > trackOffsets[i]) {
+        idx = i;
+        break;
+      }
+    }
+    return {
+      index: idx,
+      positionMs: Math.max(0, Math.round((absSeconds - (trackOffsets[idx] || 0)) * 1000)),
+    };
+  }
+  return { index: 0, positionMs: Math.max(0, Math.round(absSeconds * 1000)) };
+}
+
+// Arms the native enforcer at an ABSOLUTE book position (a chapter end). The
+// position-target mode judges the boundary on the player's own position, so
+// skip silence, a speed change, or a seek/skip from the notification, a
+// headset or the car — none of which run a JS tick while the screen is off —
+// can't move the pause off the chapter end. Binaries without it fall back to
+// the wall-clock estimate (book-seconds left / rate), kept honest by the EOC
+// tick's drift check while JS runs. Returns true when native owns the timer.
+function armNativeSleepAtPosition(absTarget: number, bookSecondsLeft: number, rate: number): boolean {
+  const m = nativeSleepModule();
+  if (m?.absSetSleepTimerAt) {
+    const st = usePlaybackStore.getState();
+    const target = nativeSleepTargetFor(absTarget, {
+      chapterQueue: st.chapterQueue,
+      chapters: st.chapters,
+      trackOffsets: _trackOffsets,
+    });
+    if (target) {
+      const shakeSecs = getSleepShakeToExtend() ? SLEEP_SHAKE_MINUTES * 60 : 0;
+      _nativeSleepArmed = true;
+      _nativeSleepPositionMode = true;
+      m.absSetSleepTimerAt(target.index, target.positionMs, SLEEP_FADE_SECONDS, shakeSecs).catch(
+        () => {
+          // Same fallback as armNativeSleepTimer: native never armed, so the
+          // JS listener has to own shake-to-extend for the live timer.
+          _nativeSleepArmed = false;
+          _nativeSleepPositionMode = false;
+          if (usePlaybackStore.getState().sleepTimer) armShakeListener();
+        }
+      );
+      return true;
+    }
+  }
+  return armNativeSleepTimer(bookSecondsLeft / (rate || 1));
+}
+
+// (Re-)arms the native enforcer from the CURRENT JS timer: after a re-target
+// (a seek into another chapter), after a same-book re-prepare rebuilt the
+// queue (the old item indices mean nothing now), and when a resume finds the
+// native timer gone. While casting the receiver plays and JS stays the only
+// enforcer. Returns true when native owns the timer.
+function syncNativeSleepTimer(): boolean {
+  const st = usePlaybackStore.getState();
+  const t = st.sleepTimer;
+  if (!t) return false;
+  if (st.isCasting) {
+    cancelNativeSleepTimer();
+    return false;
+  }
+  let armed = false;
+  if (t.endOfChapter) {
+    const ch = st.chapters?.[t.chapterIdx ?? -1];
+    if (ch) armed = armNativeSleepAtPosition(ch.end || 0, t.remaining, st.playbackSpeed || 1);
+  } else {
+    armed = armNativeSleepTimer(t.remaining);
+  }
+  // One shake owner at a time: native when armed (works with JS frozen),
+  // otherwise the JS accelerometer.
+  if (armed) disarmShakeListener();
+  else armShakeListener();
+  return armed;
+}
+
+// Same library item (and podcast episode) — the identity a sleep timer is
+// about, independent of the server session id, which a re-prepare of the same
+// book (stream recovery, streamed→downloaded) mints anew.
+function isSameSessionItem(a: any, b: any): boolean {
+  const ai = a?.libraryItemId || a?.libraryItem?.id;
+  const bi = b?.libraryItemId || b?.libraryItem?.id;
+  if (!ai || !bi || ai !== bi) return false;
+  return (a?.episodeId || null) === (b?.episodeId || null);
+}
+
+// A deliberate seek/skip to absolute `value` re-targets a chapter sleep timer,
+// and moves the native target with it BEFORE the player moves (the arm and the
+// seek are queued to the service in call order) — a native target left behind
+// would see the player past it and pause right after the jump.
+//  - plain end-of-chapter follows the listener into the destination chapter;
+//  - stop-after-chapter keeps its picked target while seeking around before
+//    it; jumping PAST it falls back to the destination chapter's end — the
+//    nearest boundary that still honours "stop at a chapter end" (pausing
+//    instantly after a deliberate skip, or silently dropping the timer and
+//    the listener's sleep intent with it, would both be wrong).
+function retargetSleepTimerForSeek(value: number) {
+  const st = usePlaybackStore.getState();
+  const t = st.sleepTimer;
+  const chapters = st.chapters;
+  if (!t?.endOfChapter || !chapters?.length) return;
+  const li = chapters.findIndex((c: any) => value >= (c.start || 0) && value < (c.end || 0));
+  if (li < 0) return;
+  let next: SleepTimerState | null = null;
+  if (t.untilChapter) {
+    if (t.chapterIdx != null && li > t.chapterIdx) {
+      next = {
+        endOfChapter: true,
+        chapterIdx: li,
+        remaining: Math.max(0, Math.round((chapters[li].end || 0) - value)),
+      };
+    }
+  } else if (li !== t.chapterIdx) {
+    next = {
+      ...t,
+      chapterIdx: li,
+      remaining: Math.max(0, Math.round((chapters[li].end || 0) - value)),
+    };
+  }
+  if (!next) return;
+  usePlaybackStore.setState({ sleepTimer: next });
+  syncNativeSleepTimer();
+}
+
+/**
+ * Resume/foreground reconciliation with the native enforcer. A JS timer can
+ * outlive its native twin (the playback service was torn down and rebuilt
+ * while paused), and with the screen off nothing else would pause — so when
+ * native reports no timer (-1), re-arm it from JS state. When native DOES hold
+ * a fixed countdown it is the truth: JS ticks stall in the background, so the
+ * JS display adopts the lower native figure instead of extending the timer.
+ */
+export async function reconcileNativeSleepTimer(): Promise<void> {
+  try {
+    const st = usePlaybackStore.getState();
+    if (!st.sleepTimer || st.isCasting) return;
+    const m = nativeSleepModule();
+    if (!m) return;
+    if (typeof m.absGetSleepTimerRemaining !== "function") {
+      // Older binary can't report — only re-arm what we know never armed.
+      if (!_nativeSleepArmed) syncNativeSleepTimer();
+      return;
+    }
+    const nativeRemaining = Number(await m.absGetSleepTimerRemaining());
+    const t = usePlaybackStore.getState().sleepTimer;
+    if (!t || !Number.isFinite(nativeRemaining)) return;
+    if (nativeRemaining < 0) {
+      appLogger.info("Native sleep timer missing under a live JS timer — re-arming", "Playback");
+      syncNativeSleepTimer();
+      return;
+    }
+    if (!t.endOfChapter && nativeRemaining < t.remaining - 2) {
+      _sleepLastTickAt = Date.now();
+      usePlaybackStore.setState({
+        sleepTimer: { ...t, remaining: Math.max(0, Math.round(nativeRemaining)) },
+      });
+    }
   } catch {}
 }
 
@@ -1808,8 +2001,13 @@ export interface SleepTimerState {
   endOfChapter: boolean;
   remaining: number; // seconds left, or seconds until end of chapter
   // Chapter the end-of-chapter timer was armed in — lets the tick detect
-  // the boundary crossing even if a tick lands just past it.
+  // the boundary crossing even if a tick lands just past it. For a
+  // stop-after-chapter timer, the chapter the user PICKED.
   chapterIdx?: number;
+  // "Stop after chapter N": the target is the user's pick, not "wherever I
+  // am now" — seeking around before it never re-targets it (plain
+  // end-of-chapter follows the listener into each new chapter instead).
+  untilChapter?: boolean;
 }
 
 interface PlaybackState {
@@ -1903,7 +2101,9 @@ interface PlaybackState {
   nextChapter: () => Promise<void>;
   previousChapter: () => Promise<void>;
   setPlaybackSpeed: (speed: number) => Promise<void>;
-  setSleepTimer: (seconds: number, endOfChapter?: boolean) => void;
+  // `untilChapterIdx` (with endOfChapter) arms a stop-after-chapter timer:
+  // pause at the end of THAT chapter rather than the current one.
+  setSleepTimer: (seconds: number, endOfChapter?: boolean, untilChapterIdx?: number) => void;
   // Mirror a NATIVE sleep-timer event (the Media3 service enforces the timer
   // through doze; see armNativeSleepTimer) into JS state.
   onNativeSleepFired: () => void;
@@ -3166,7 +3366,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _metaCoverUrl = artworkUrl || session.coverUrl || "";
       // A sleep timer from the previous book must not run against the new one
       // (end-of-chapter timers would pause the new book almost immediately).
-      get().cancelSleepTimer();
+      // The SAME book re-prepared keeps its timer — stream recovery after a
+      // token rotation (routine now that access tokens expire hourly), the
+      // streamed→downloaded swap, a re-tap of Play: the listener's intent
+      // didn't change, and cancelling here silently let the "recovered"
+      // playback run all night. Its native twin is re-armed against the
+      // rebuilt queue once that exists (below).
+      const keepSleepTimer = isSameSessionItem(prevSession, session) && !!get().sleepTimer;
+      if (!keepSleepTimer) get().cancelSleepTimer();
 
       // Reset progress-sync bookkeeping for the new session.
       _timeListenedAccum = 0;
@@ -3254,6 +3461,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // native onAudioSessionIdChanged listener re-applies if the session swaps.
       applyVoiceBoost();
 
+      // A carried-over sleep timer (same book re-prepared) re-arms its native
+      // enforcer against THIS queue — item indices/offsets may differ from the
+      // one it was armed on (chapter clips ⇄ flat ⇄ local files).
+      if (keepSleepTimer && get().sleepTimer) syncNativeSleepTimer();
+
       // Mirror the current book to the home-screen resume widget and to the
       // native Media3 service (itemId powers Android Auto's resume card).
       // episodeId is persisted too so onPlaybackResumption resumes the right
@@ -3298,7 +3510,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       console.error("[PlaybackStore] Failed to prepare playback session:", err);
       if (!stale() && didReset) {
         // The old queue is already gone — leave a COHERENT empty state, not a
-        // ghost session whose transport controls silently no-op.
+        // ghost session whose transport controls silently no-op. A timer the
+        // same-book re-prepare carried over has nothing left to pause.
+        if (get().sleepTimer) get().cancelSleepTimer();
         set({
           currentSession: null,
           isPlaying: false,
@@ -3410,6 +3624,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     await TrackPlayer.play();
     if (!get().currentSession) return;
     set({ isPlaying: true });
+    // Make sure the native enforcer still holds an armed timer — it's the
+    // only thing that pauses once the screen goes off (fire-and-forget).
+    if (get().sleepTimer) reconcileNativeSleepTimer().catch(() => {});
     // Cross-device catch-up (tablet ↔ phone), OPTIMISTIC: audio has already
     // started, so a slow-but-online server never delays the resume. If this
     // session sat paused long enough that another device could have moved the
@@ -3485,19 +3702,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // A deliberate seek re-arms an end-of-chapter sleep timer to the
     // DESTINATION chapter — jumping forward past the armed chapter's end
     // used to read as a "boundary crossing" and pause instantly mid-chapter.
-    const eocTimer = get().sleepTimer;
-    if (eocTimer?.endOfChapter && chapters?.length) {
-      const li = chapters.findIndex((c: any) => value >= (c.start || 0) && value < (c.end || 0));
-      if (li >= 0 && li !== eocTimer.chapterIdx) {
-        set({
-          sleepTimer: {
-            ...eocTimer,
-            chapterIdx: li,
-            remaining: Math.max(0, Math.round((chapters[li].end || 0) - value)),
-          },
-        });
-      }
-    }
+    retargetSleepTimerForSeek(value);
     if (isCasting && castClient) {
       const castSeekAbs = get().castSeekAbs;
       // Optimistic: move the scrubber immediately — a cross-track cast seek
@@ -3654,6 +3859,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const ch = chapters?.[index];
     if (!ch) return;
     if (chapterQueue && !isCasting) {
+      // Chapter jumps re-target an end-of-chapter timer too (see seek()) —
+      // BEFORE the skip, so the native enforcer never sees the player past
+      // its old target and pauses right after the jump.
+      retargetSleepTimerForSeek(ch.start || 0);
       // Jump directly to the chapter's clip — no re-buffer of intermediate ones.
       await TrackPlayer.skip(index);
       await TrackPlayer.seekTo(0);
@@ -3661,17 +3870,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Same immediate persist as seek() — a kill right after a chapter jump
       // must not resume at the pre-jump position.
       saveSessionPositionNow(ch.start || 0);
-      // Chapter jumps re-arm an end-of-chapter timer too (see seek()).
-      const t = get().sleepTimer;
-      if (t?.endOfChapter && t.chapterIdx !== index) {
-        set({
-          sleepTimer: {
-            ...t,
-            chapterIdx: index,
-            remaining: Math.max(0, Math.round((ch.end || 0) - (ch.start || 0))),
-          },
-        });
-      }
       return;
     }
     if (isCasting && castClient) {
@@ -3788,10 +3986,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   // Starts (or replaces) a sleep timer. When `endOfChapter` is true the
   // countdown tracks the time until the current chapter ends; otherwise it
   // counts down a fixed number of seconds. Playback pauses at zero.
-  setSleepTimer: (seconds, endOfChapter = false) => {
+  setSleepTimer: (seconds, endOfChapter = false, untilChapterIdx) => {
     // No session → nothing to pause later; an orphan interval dragged the
     // player volume down forever via the fade path.
     if (!get().currentSession) return;
+    // Stop-after-chapter needs a real chapter to aim at, at or after the one
+    // playing (an earlier chapter's end is already behind the listener).
+    const untilChapter = endOfChapter && untilChapterIdx != null;
+    if (untilChapter) {
+      const { chapters, currentChapterIndex } = get();
+      if (
+        !Number.isInteger(untilChapterIdx) ||
+        !chapters?.[untilChapterIdx as number] ||
+        (currentChapterIndex >= 0 && (untilChapterIdx as number) < currentChapterIndex)
+      ) {
+        return;
+      }
+    }
     // Guard the fixed-duration input at the boundary (mirrors setPlaybackSpeed):
     // a non-finite or non-positive value makes `remaining` NaN/≤0 — NaN never
     // satisfies remaining<=0 (so it never fires) yet feeds setVolume(NaN),
@@ -3813,24 +4024,41 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     let armedChapterIdx: number | undefined;
     if (endOfChapter) {
       const { chapters, currentChapterIndex, position } = get();
-      const ch = chapters?.[currentChapterIndex];
+      armedChapterIdx = untilChapter ? (untilChapterIdx as number) : currentChapterIndex;
+      const ch = chapters?.[armedChapterIdx];
       initialRemaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : 0;
-      armedChapterIdx = currentChapterIndex;
     }
-    set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
+    set({
+      sleepTimer: {
+        endOfChapter,
+        remaining: initialRemaining,
+        chapterIdx: armedChapterIdx,
+        ...(untilChapter ? { untilChapter: true } : {}),
+      },
+    });
 
     // Native enforcement (doze-proof pause/fade/shake) — local playback only;
-    // while casting the receiver plays and JS stays authoritative.
-    // The native enforcer counts WALL-clock time, but an End-of-chapter timer's
-    // `remaining` is BOOK-seconds (chapter end − position). At any rate ≠ 1x the
-    // two diverge, so under doze (JS frozen — the exact case the native path
-    // exists for) native would fire at the wrong point (late at >1x, early at
-    // <1x). Convert to wall-clock for the native arm. Fixed-duration timers are
-    // already wall-clock (real listening time) and pass through unchanged.
-    const speedNow = get().playbackSpeed || 1;
-    const nativeRemaining = endOfChapter ? initialRemaining / speedNow : initialRemaining;
-    const nativeArmed = !get().isCasting && armNativeSleepTimer(nativeRemaining);
-    if (get().isCasting) cancelNativeSleepTimer();
+    // while casting the receiver plays and JS stays authoritative. JS timers
+    // stall with the screen off, so THIS is what actually pauses a pocketed
+    // phone. Chapter timers arm at the chapter END POSITION (see
+    // armNativeSleepAtPosition — on older binaries a wall-clock estimate:
+    // `remaining` is BOOK-seconds and the clock runs at 1/rate of that).
+    // Fixed-duration timers are wall-clock (real listening time) already.
+    let nativeArmed = false;
+    if (get().isCasting) {
+      cancelNativeSleepTimer();
+    } else if (endOfChapter) {
+      const ch = get().chapters?.[armedChapterIdx ?? -1];
+      if (ch) {
+        nativeArmed = armNativeSleepAtPosition(
+          ch.end || 0,
+          initialRemaining,
+          get().playbackSpeed || 1
+        );
+      }
+    } else {
+      nativeArmed = armNativeSleepTimer(initialRemaining);
+    }
 
     // Shake-to-extend: when the native timer is armed it owns the shake sensor
     // too (and works with JS frozen); arming the JS accelerometer as well
@@ -3894,6 +4122,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           // Crossed the boundary between ticks — fire now instead of
           // silently re-arming against the NEXT chapter's end.
           remaining = 0;
+        } else if (timer.untilChapter && armed >= 0) {
+          // Stop-after-chapter: the picked chapter's end stays the target
+          // wherever the listener is before it (gaps included).
+          const ch = chapters?.[armed];
+          if (!ch) return;
+          remaining = Math.max(0, Math.round((ch.end || 0) - position));
         } else if (liveIdx !== -1 && liveIdx < armed) {
           // User seeked BACK into an earlier chapter — re-arm there.
           const ch = chapters?.[liveIdx];
@@ -3914,11 +4148,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         remaining = get().isPlaying ? timer.remaining - elapsedS : timer.remaining;
       }
 
-      // Native enforcer drift check (EOC timers): any seek — forward, back,
-      // or within the armed chapter — changes the JS remaining while the
-      // native fixed deadline stays put, so the service would pause at the
-      // OLD chapter end. Re-arm whenever the two countdowns disagree by >3s.
-      if (timer.endOfChapter && _nativeSleepArmed && !get().isCasting && get().isPlaying) {
+      // Native enforcer drift check — LEGACY wall-clock arm only (binaries
+      // without the position-target mode): any seek — forward, back, or
+      // within the armed chapter — changes the JS remaining while the native
+      // fixed deadline stays put, so the service would pause at the OLD
+      // chapter end. Re-arm whenever the two countdowns disagree by >3s. A
+      // position-mode target only moves when the TARGET CHAPTER changes
+      // (re-armed just below).
+      if (
+        timer.endOfChapter &&
+        _nativeSleepArmed &&
+        !_nativeSleepPositionMode &&
+        !get().isCasting &&
+        get().isPlaying
+      ) {
         const nativeExpected =
           _nativeSleepArmedRemaining - (Date.now() - _nativeSleepArmedAt) / 1000;
         // Compare in WALL-clock units (native's units): `remaining` is
@@ -3971,8 +4214,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           endOfChapter: timer.endOfChapter,
           remaining: Math.round(remaining * 10) / 10,
           chapterIdx: armedIdx,
+          ...(timer.untilChapter ? { untilChapter: true } : {}),
         },
       });
+      // The tick re-targeted to another chapter (a seek-back the store's
+      // seek() never saw — e.g. made through the car's own seekbar): move the
+      // native target with it, or it would pause at the old chapter's end.
+      if (timer.endOfChapter && armedIdx !== timer.chapterIdx && _nativeSleepPositionMode) {
+        syncNativeSleepTimer();
+      }
     }, 1000);
   },
 
@@ -4107,6 +4357,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _preparedToken = null;
     _sleepRewindPending = false;
     disarmShakeListener();
+    // The native twin too — left armed, it would pause (or fade) whatever the
+    // service plays next, e.g. a book started from Android Auto.
+    cancelNativeSleepTimer();
 
     set({
       currentSession: null,
