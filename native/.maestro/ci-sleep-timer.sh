@@ -23,9 +23,12 @@
 # Scenarios (one session, in order):
 #   1. FIXED 1-minute timer, app backgrounded (HOME), screen on.
 #   2. END OF CHAPTER, screen off + deep Doze.
-#   3. END OF CHAPTER + a headset NEXT while the screen is off: the timer
-#      follows the skip and pauses at the end of the chapter skipped INTO —
-#      not at the old chapter's deadline, and not instantly after the skip.
+#   3. END OF CHAPTER + a headset/steering-wheel NEXT key a few seconds
+#      before the chapter ends, screen off. This app maps that key to a JUMP
+#      FORWARD (MusicService.onMediaKeyEvent), so the jump lands just past the
+#      boundary: the timer must follow it and pause at the end of the chapter
+#      jumped INTO — not instantly after the jump (a native target left at the
+#      old chapter's end), and not at the old chapter's wall-clock deadline.
 #   4. STOP AFTER CHAPTER 9 (picked in Chapter 8), screen off + deep Doze.
 #
 # A chapter scenario only counts when the device was ALREADY asleep and
@@ -70,6 +73,49 @@ snap() {
   pos=$(printf '%s\n' "$out" | grep -m1 -oE 'state=PlaybackState \{state=[A-Z_]+\([0-9]+\), position=-?[0-9]+' | sed -E 's/.*position=//')
   desc=$(printf '%s\n' "$out" | grep -m1 -oE 'metadata: size=[0-9]+, description=[^,]*' | sed -E 's/.*description=//')
   echo "$(date +%s)|${st:-?}|${pos:-?}|${desc:-?}"
+}
+
+# Live chapter-relative position (ms) + state + window of the session:
+# "<STATE>|<live ms>|<window title>". PlaybackState stamps `position` at
+# `updated` (elapsedRealtime ms) and it advances at `speed` from there while
+# PLAYING; /proc/uptime runs on the same boot-time clock. (Skip silence moves
+# the real position faster than this through silent stretches, so the
+# estimate only ever LAGS there — the jump below waits in the final tone.)
+live_snap() {
+  local out line st pos spd upd now desc
+  out=$(adb shell "dumpsys media_session; cat /proc/uptime" 2>/dev/null)
+  line=$(printf '%s\n' "$out" | grep -m1 -E 'state=PlaybackState \{')
+  st=$(printf '%s\n' "$line" | grep -oE 'state=PlaybackState \{state=[A-Z_]+' | sed -E 's/.*state=//')
+  pos=$(printf '%s\n' "$line" | grep -oE ', position=-?[0-9]+' | head -n 1 | sed -E 's/.*=//')
+  spd=$(printf '%s\n' "$line" | grep -oE 'speed=[0-9.]+' | head -n 1 | sed -E 's/.*=//')
+  upd=$(printf '%s\n' "$line" | grep -oE 'updated=[0-9]+' | head -n 1 | sed -E 's/.*=//')
+  now=$(printf '%s\n' "$out" | tail -n 1 | awk '{printf "%d", $1 * 1000}')
+  desc=$(printf '%s\n' "$out" | grep -m1 -oE 'metadata: size=[0-9]+, description=[^,]*' | sed -E 's/.*description=//')
+  if [ "$st" = "PLAYING" ] && [ -n "$pos" ] && [ -n "$spd" ] && [ -n "$upd" ] && [ -n "$now" ]; then
+    pos=$(awk -v p="$pos" -v s="$spd" -v u="$upd" -v n="$now" 'BEGIN { printf "%d", p + (n - u) * s }')
+  fi
+  echo "${st:-?}|${pos:-?}|${desc:-?}"
+}
+
+# Poll (every ~0.5s, up to $2 seconds) until the session is PLAYING at or
+# past $1 ms into the chapter it started in. Fails if it pauses, leaves that
+# chapter, or times out first.
+wait_for_live_pos() {
+  local want="$1" secs="$2" start chapter="" snap st pos desc
+  start=$(date +%s)
+  while [ $(($(date +%s) - start)) -lt "$secs" ]; do
+    snap=$(live_snap)
+    st=$(field "$snap" 1); pos=$(field "$snap" 2); desc=$(field "$snap" 3)
+    [ -z "$chapter" ] && chapter="$desc"
+    if [ "$st" != "PLAYING" ] || [ "$desc" != "$chapter" ]; then
+      echo "wait_for_live_pos: left the window early ($snap)"
+      return 1
+    fi
+    [ "$pos" != "?" ] && [ "$pos" -ge "$want" ] && { echo "LIVE $snap"; return 0; }
+    sleep 0.5
+  done
+  echo "wait_for_live_pos: timed out ($snap)"
+  return 1
 }
 
 # Sample the session every 2s for $1 seconds into $SAMPLES (and the run log).
@@ -233,22 +279,32 @@ else
   rc=1
 fi
 
-echo "########## 3. end of chapter + headset NEXT with the screen off ##########"
+echo "########## 3. end of chapter + a NEXT-key jump across the boundary, screen off ##########"
 wake_device
 if prepare 1 "Chapter 5" eoc none; then
   if sleep_device; then
-    # NEXT 8s in, dispatched to the media session like a headset button.
-    # The timer must follow the skip to the END of the chapter skipped
-    # into — not pause right after the skip (a target left behind at the
-    # old chapter's end), and not run on to the old deadline.
-    sample_for 120 8 "adb shell cmd media_session dispatch next || adb shell input keyevent KEYCODE_MEDIA_NEXT"
-    if assert_started_asleep "eoc-remote-next"; then
-      armed_in=$(field "$(head -n 1 "$SAMPLES")" 4)
-      skipped_to=$(next_chapter "$armed_in")
-      if grep -q "|${skipped_to}\$" "$SAMPLES"; then
-        assert_paused_at_chapter_end "eoc-remote-next" "$skipped_to"
+    first=$(snap)
+    echo "POS $first"
+    if [ "$(field "$first" 2)" != "PLAYING" ]; then
+      echo "::error::[eoc-jump] VOID: already $(field "$first" 2) when the device went to sleep"
+      rc=1
+    else
+      armed_in=$(field "$first" 4)
+      jumped_into=$(next_chapter "$armed_in")
+      # ~7s before the end of the armed chapter, press NEXT (= jump forward
+      # by the configured 10s): the jump lands ~3s into the next chapter.
+      if wait_for_live_pos $((CHAPTER_MS - 7000)) 150; then
+        echo "== media key NEXT (jump forward) near the end of '$armed_in' =="
+        adb shell cmd media_session dispatch next || adb shell input keyevent KEYCODE_MEDIA_NEXT
+        sample_for 110
+        if head -n 3 "$SAMPLES" | grep -q "|PLAYING|[0-9-]*|${jumped_into}\$"; then
+          assert_paused_at_chapter_end "eoc-jump" "$jumped_into"
+        else
+          echo "::error::[eoc-jump] the NEXT-key jump never carried playback into '$jumped_into' (first samples: $(head -n 3 "$SAMPLES" | tr '\n' ' '))"
+          rc=1
+        fi
       else
-        echo "::error::[eoc-remote-next] the NEXT key never moved playback off '$armed_in' — the scenario couldn't run"
+        echo "::error::[eoc-jump] couldn't reach the jump point near the end of '$armed_in' while playing"
         rc=1
       fi
     fi
