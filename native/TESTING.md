@@ -97,3 +97,22 @@ TOC/settings sheets, and asserts the Continue Reading shelf appears after
 closing — the whole reader→PATCH→shelf progress pipeline. foliate-js is vendored (utils/foliateBundle.ts), so the reader renders
 offline and this flow is a normal blocking part of the CI gate. Audio flows take a `BOOK` env (CI pins "The Test Book by
 .*" so the ebook card isn't grabbed).
+
+## Background sleep timer (emulator + adb)
+
+`.maestro/ci-sleep-timer.sh` (workflow `e2e-sleep-timer.yml`: PRs touching the
+sleep timer / playback store / player patch, nightly, and on dispatch) is the
+real test for the sleep timer with the app in the background. With the screen
+off Android stalls RN's JS timers, so the store's 1s sleep interval stops and
+the Media3 service's native enforcer is what pauses — the UI can't show that,
+so every verdict comes from `dumpsys media_session` (state, position, current
+chapter window) sampled while the device is backgrounded / screen-off /
+force-idled. Fixture: "The Sleep Book" (ten 60s chapters of tone + 40s
+silence + tone) with Skip silence ON. Scenarios: fixed 1-minute timer after
+HOME; end of chapter in deep Doze; end of chapter + a headset NEXT with the
+screen off; stop after a picked chapter in deep Doze. The Maestro steps live
+in `.maestro/sleep/` (not part of `npm run e2e`).
+
+Locally (emulator with the release APK installed, ABS reachable at
+10.0.2.2:13378 with that book): `bash .maestro/ci-sleep-timer.sh`.
+

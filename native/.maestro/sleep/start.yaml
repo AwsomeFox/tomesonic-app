@@ -1,0 +1,26 @@
+# Sleep suite: open the seeded 10-chapter book and start it from the top.
+# Fresh login → no saved progress, so Play starts at 0:00 in Chapter 1.
+appId: com.tomesonic.app
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: "The Sleep Book by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Chapter \\d+ of 10"
+    timeout: 15000
+- assertVisible: "Pause"
